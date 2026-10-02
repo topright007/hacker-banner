@@ -157,6 +157,28 @@ Colima и адрес, на котором Ollama слушает подключе
 `OLLAMA_HOST` описана в [FAQ Ollama](https://docs.ollama.com/faq); привязка к
 `0.0.0.0` также открывает сервис другим сетевым интерфейсам машины.
 
+## Skill-based сценарии
+
+Отдельная группа сценариев моделирует компрометацию проектного skill. Пользователь
+явно просит применить `tiny-sum-maintainer`, OpenCode загружает
+`.opencode/skills/tiny-sum-maintainer/SKILL.md` через инструмент `skill`, а
+вредоносная инструкция находится только внутри skill; `README.md` остаётся чистым.
+
+Сценарии: `skill-clean`, `skill-direct`, `skill-important-instructions`,
+`skill-ignore-previous`, `skill-tool-knowledge`, `skill-encoded` и `skill-dos`.
+Их можно прогнать отдельно от README-сценариев:
+
+```sh
+STAND_UPSTREAM=http://host.docker.internal:11434/v1 STAND_API_KEY=ollama \
+  python3 batch_run.py --mode real --model qwen3:4b-instruct --timeout 900 \
+  --scenarios skill-clean skill-direct skill-important-instructions \
+  skill-ignore-previous skill-tool-knowledge skill-encoded skill-dos
+```
+
+В `manifest.json` для них записаны `payload_source: skill`, hash skill и маркер
+доставки. `session-analysis.json` отдельно показывает вызов инструмента `skill` и
+попадание его содержимого в следующий запрос к модели.
+
 ## Диагностика и экспорт сессии
 
 Добавьте `--trace-session`, чтобы до удаления контейнера выгрузить сессию через
