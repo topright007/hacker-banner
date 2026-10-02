@@ -1,5 +1,7 @@
 services:
   collector:
+    image: security-stand-service:${STAND_IMAGE_REV:-dev}
+    pull_policy: never
     build:
       context: .
       target: service
@@ -18,6 +20,8 @@ services:
     logging:
       options: {max-size: 10m, max-file: "1"}
   model-gateway:
+    image: security-stand-service:${STAND_IMAGE_REV:-dev}
+    pull_policy: never
     build:
       context: .
       target: service
@@ -40,6 +44,8 @@ services:
     pids_limit: 64
     mem_limit: 256m
   guard:
+    image: security-stand-guard:${STAND_IMAGE_REV:-dev}
+    pull_policy: never
     build:
       context: .
       target: guard
@@ -61,6 +67,8 @@ services:
       timeout: 1s
       retries: 15
   agent:
+    image: security-stand-agent:${STAND_IMAGE_REV:-dev}
+    pull_policy: never
     build:
       context: .
       target: agent
