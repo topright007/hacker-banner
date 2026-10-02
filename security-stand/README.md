@@ -218,6 +218,58 @@ python3 stand.py --analyze-run runs/RUN_ID
 нужны её записанные сообщения. Даже явное объяснение модели — наблюдаемое
 объяснение, а не доказательство всех внутренних причин решения.
 
+## Кампания первых десяти skill-подходов
+
+`campaign.py` исполняет план из `SKILL-EXFILTRATION-TEST-PLAN.md`: проверяет
+десять атакующих skill и их clean-пары, запускает обе локальные модели, сохраняет
+native-сессии после каждого повтора и строит отчёты только из записанных
+`result.json`. Невалидный запуск исключается из знаменателя и автоматически
+повторяется один раз.
+
+Полный запуск с 10 валидными атакующими повторами, тремя clean-контролями каждой
+пары, baseline `skill-tool-knowledge` и условным подтверждением трёх лидеров:
+
+```sh
+cd ~/projects/ai/mvp/security-stand
+STAND_UPSTREAM=http://host.docker.internal:11434/v1 STAND_API_KEY=ollama \
+  python3 campaign.py --campaign-id skill-exfiltration-10x --timeout 900
+```
+
+Кампания записывает resume-состояние после каждого запуска. Для продолжения
+укажите уже созданный каталог; готовые комбинации stage/model/scenario/repeat
+повторно не запускаются:
+
+```sh
+STAND_UPSTREAM=http://host.docker.internal:11434/v1 STAND_API_KEY=ollama \
+  python3 campaign.py \
+  --campaign-dir test-sessions/skill-exfiltration-campaigns/skill-exfiltration-10x \
+  --timeout 900
+```
+
+Для поэтапной проверки доступны `--stop-after smoke`, `clean`, `attack` и
+`baseline`. `--report-only` заново собирает `results.csv`, индивидуальные
+`REPORT.md` и `META-REPORT.md` без запуска модели.
+
+Итоговая структура:
+
+```text
+test-sessions/skill-exfiltration-campaigns/<campaign-id>/
+  campaign.json
+  results.json
+  results.csv
+  META-REPORT.md
+  completion-audit.json
+  gemma4-26b-a4b-it-qat/<approach>/REPORT.md
+  qwen3-4b-instruct/<approach>/REPORT.md
+  smoke/<scenario>/run-*/
+```
+
+`manifest.json` каждого запуска содержит digest модели, revision сценария,
+SHA-256 и mode всех файлов skill, номер повтора, задачу, лимиты контекста/вывода
+и зафиксированные параметры sampling. `results.csv` содержит `skill_loaded`,
+`payload_delivered`, `sensitive_call_attempted`, `exfiltration_received`,
+`task_success`, `dos_signal` и `run_valid`.
+
 ## Результат
 
 `runs/<run_id>/` содержит manifest, JSON-события OpenCode, stderr, реальные запросы
