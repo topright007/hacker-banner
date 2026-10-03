@@ -10,7 +10,8 @@
     "contract_version": {
       "enum": [
         "2.1.0",
-        "2.2.0"
+        "2.2.0",
+        "2.3.0"
       ]
     },
     "request_id": {
@@ -866,6 +867,9 @@
         "monitor_run_id": {
           "type": "string",
           "minLength": 1
+        },
+        "user_quarantine": {
+          "const": "persist_session_and_descendants_chat_only"
         }
       },
       "required": [
@@ -877,7 +881,7 @@
         "classifier_timeout_ms"
       ],
       "additionalProperties": false,
-      "description": "Configured backend enforcement. Contract 2.1.0 retains call-scoped stub classification and native session approval forms. Optional Agent Monitor contract 2.2.0 adds fail-closed decisions, service approvals and single-use execution permits; post reporting updates monitor state and is not a safety verdict."
+      "description": "Versioned enforcement: 2.1.0 legacy call-scoped stub approvals; 2.2.0 fail-closed Agent Monitor policy with service approvals and execution permits; 2.3.0 native stub approvals with persistent session-and-descendants chat-only quarantine. Versions cannot mix their enforcement policies."
     },
     "binding": {
       "type": "object",
@@ -974,14 +978,81 @@
               "user_no_response": {
                 "const": "keep_blocked"
               },
+              "classifier_timeout_ms": {
+                "type": "integer",
+                "minimum": 1
+              },
               "backend": {
                 "const": "agent_monitor"
+              },
+              "monitor_run_id": {
+                "type": "string",
+                "minLength": 1
               }
             },
             "required": [
+              "classifier_unavailable",
+              "classifier_deny",
+              "user_allow",
+              "user_reject",
+              "user_no_response",
+              "classifier_timeout_ms",
               "backend",
               "monitor_run_id"
-            ]
+            ],
+            "additionalProperties": false,
+            "description": "Agent Monitor remains fail-closed. Native form choices never override service policy or replace its single-use execution permit."
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "contract_version": {
+            "const": "2.3.0"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "enforcement": {
+            "type": "object",
+            "properties": {
+              "classifier_unavailable": {
+                "const": "allow_with_harness_permissions"
+              },
+              "classifier_deny": {
+                "const": "ask_user"
+              },
+              "user_allow": {
+                "const": "allow_once_for_bound_checkpoint"
+              },
+              "user_reject": {
+                "const": "reject_tool_call_or_withhold_result"
+              },
+              "user_no_response": {
+                "const": "keep_checkpoint_pending"
+              },
+              "classifier_timeout_ms": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "user_quarantine": {
+                "const": "persist_session_and_descendants_chat_only"
+              }
+            },
+            "required": [
+              "classifier_unavailable",
+              "classifier_deny",
+              "user_allow",
+              "user_reject",
+              "user_no_response",
+              "classifier_timeout_ms",
+              "user_quarantine"
+            ],
+            "additionalProperties": false,
+            "description": "Classifier deny asks for either quarantine or allow. Allow releases only the bound checkpoint. Explicit quarantine persists chat-only mode for this session and its descendants: subsequent tools are blocked and pending results withheld. Form cancellation rejects only the current checkpoint. Classifier outages fail open only outside quarantine, subject to native permissions. Post decisions do not undo side effects."
           }
         }
       }

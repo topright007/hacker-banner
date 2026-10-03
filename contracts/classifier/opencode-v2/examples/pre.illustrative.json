@@ -1,6 +1,6 @@
 {
   "contract": "opencode-plugin-classifier",
-  "contract_version": "2.1.0",
+  "contract_version": "2.3.0",
   "request_id": "request",
   "phase": "pre_tool_call",
   "harness": {
@@ -74,10 +74,7 @@
       "root_session_id": "root",
       "root_resolved": true,
       "mode": "current_ancestors_and_observed_descendants",
-      "discovered_session_ids": [
-        "root",
-        "child"
-      ],
+      "discovered_session_ids": ["root", "child"],
       "tree_complete": false
     },
     "sessions": [
@@ -288,9 +285,7 @@
         "child_session_id": "child",
         "delegation_depth": 1,
         "relation_source": "ctx.session.get.parentID",
-        "evidence_paths": [
-          "/context/sessions/1/native_info/value/parentID"
-        ],
+        "evidence_paths": ["/context/sessions/1/native_info/value/parentID"],
         "child_user_message_paths": [
           "/context/sessions/1/observed_messages/value/0"
         ]
@@ -415,9 +410,7 @@
                 "type": "string"
               }
             },
-            "required": [
-              "path"
-            ],
+            "required": ["path"],
             "additionalProperties": false,
             "$defs": {}
           },
@@ -745,9 +738,7 @@
       },
       "session_gate": {
         "state": "awaiting_classifier",
-        "scope_session_ids": [
-          "child"
-        ],
+        "scope_session_ids": ["child"],
         "reason": null
       }
     },
@@ -838,10 +829,11 @@
     "user_allow": "allow_once_for_bound_checkpoint",
     "user_reject": "reject_tool_call_or_withhold_result",
     "user_no_response": "keep_checkpoint_pending",
-    "classifier_timeout_ms": 1000
+    "classifier_timeout_ms": 1000,
+    "user_quarantine": "persist_session_and_descendants_chat_only"
   },
   "decision_binding": {
     "format": "sha256-rfc8785-request-without-decision_binding",
-    "digest": "5e6c80454f11616a3e99bf8393e7c9fb2647ec5facb1f62bfe635fb4547acc46"
+    "digest": "a380b66780be36147ad908d43cffcd2ea9ddacd01143a0bf54e956915b093d25"
   }
 }

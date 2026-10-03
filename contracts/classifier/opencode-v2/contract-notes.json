@@ -1,12 +1,12 @@
 {
   "contract": "opencode-plugin-classifier",
-  "contract_version": "2.1.0",
+  "contract_version": "2.3.0",
   "opencode_version": "2.0.22",
   "package": "@opencode/plugin@2.0.22",
   "plugin_api": "v2",
-  "scope": "Standalone V2 contract. V1 implementation and contract are preserved separately.",
+  "scope": "Maintained OpenCode V2 contract for plugin 0.4.0. Stub uses 2.3.0, Agent Monitor uses 2.2.0, and schemas retain older versions. V1 remains unsupported legacy.",
   "availability": [
-    "Only public Plugin.Context is used. It does not expose the complete SDK session.list/export/log/inbox/config/credential APIs. No additional unauthenticated HTTP client is created.",
+    "Classifier collection uses public Plugin.Context; it does not expose complete SDK session.list/export/log/inbox/config/credential APIs. Human decisions use native session forms through an authenticated client connected to the same existing local OpenCode service.",
     "ctx.session.context returns active native messages after compaction. Every observed native message is retained by ID independently, including across compaction. This does not recover data from before plugin attachment, deleted data, or unobserved children.",
     "Related sessions comprise the current session, ancestors resolved through session.get, and descendants learned from observed session.created events. tree_complete is always false; root resolution is separate.",
     "Session parentID establishes lineage. fork provenance is retained in native_info and is not treated as a parent-child delegation. depth is derived only where the root chain is known.",
@@ -37,27 +37,29 @@
     "No OS sandbox/network policy or syscall interception is provided. Transport/permission hooks improve observation but do not undo side effects or make every operation synchronous."
   ],
   "retention": [
-    "Event/tool/approval journals and message archives start at attachment and are not automatically restored after restart. durable_across_restart is false.",
+    "Event/tool/approval journals and message archives start at attachment and are not automatically restored after restart; their durable_across_restart flag is false. Persistent quarantine markers are separate state and survive restarts when storage succeeds.",
     "Deduplication and retaining only the latest full hook snapshots avoid repeatedly retaining full historical model contexts. Journals and unique message data still grow without automatic rotation."
   ],
   "examples": "examples/*.illustrative.json are synthetic mocked-Context examples validated with the same schema and binding code, not recordings from a real session.",
   "validation": "collector tests cover native schema-spoof input, API failures, credentials, compaction retention, Effect/MCP schemas, successful/error post outcomes, transport body ownership and Code Mode ID reuse.",
   "enforcement": [
-    "A classifier deny opens an OpenCode native session approval form and holds only the bound checkpoint until the user decides. No response leaves that checkpoint pending; it is not classifier unavailability.",
-    "A pre-tool rejection returns a typed Tool.Error before execution. The model can continue the conversation and choose a different action. Rejection does not latch a session or related session tree.",
-    "A post-tool rejection replaces the complete Tool.Result or Tool.Error with a safe placeholder before model release, including content, structured output, metadata and extension fields. Already completed side effects are not undone; the tool is not re-run.",
-    "Own classifier/user audit decisions use scope=call. Related session context is evidence only and does not broaden the user decision to other operations.",
-    "Classifier timeout, unavailable service and invalid classifier responses remain fail-open under native harness permissions. Startup and internal sensor failures cancel affected tool operations; ordinary text model conversation remains available.",
-    "The explicit options.enabled=false setting disables the sensor only after the OpenCode process or service restarts."
+    "In backend=stub, a classifier deny holds the bound checkpoint and creates a native OpenCode session form. The visible content is limited to a warning, tool name, and reason; arguments, results, context JSON and stack traces are not displayed. Exactly two choices are offered without free text or a preselected answer: «Продолжить в режиме карантина» and «Довериться и продолжить». There is no sensor browser page or separate approval server.",
+    "In backend=stub, «Довериться и продолжить» allows exactly one bound checkpoint. Before execution it releases the call; after execution it releases the held Tool.Result or Tool.Error without rerunning the tool. Pre and post are separate approvals and the always-deny stub can ask twice.",
+    "In backend=stub, «Продолжить в режиме карантина» rejects the current checkpoint and persists chat-only quarantine for its session. All later covered tool calls and result releases in that session and descendants are blocked automatically without more classifier calls or human prompts. Text-only LLM conversation remains available.",
+    "Quarantine inheritance follows the current session and ancestor parentID chain, including descendants created after activation. Unrelated sessions are unaffected. Fork provenance alone is not a delegation edge. Missing or invalid ancestry and unreadable or corrupt markers reject the affected checkpoint rather than silently releasing tools.",
+    "Quarantine is stored in ~/.local/state/opencode-sensor-v2/quarantine, shared across default plugin instances and independent of per-instance audit directories. With options.stateDirectory it is stored at <stateDirectory>/quarantine. Each marker filename hashes the session ID and atomically stores only schema version, session ID, status, and activation timestamp. Failed persistence retains quarantine in local memory but cannot guarantee retention after restart.",
+    "In backend=stub, Closing or cancelling a form and internal sensor failures reject only the affected checkpoint; they do not select permanent quarantine. No answer keeps a checkpoint pending. There is no user choice to remove quarantine within the same session.",
+    "A pre rejection returns typed Tool.Error before local execution. A post rejection replaces the complete Tool.Result or Tool.Error with a safe three-line placeholder, including replacement of content, structured output, metadata and extension fields. Completed side effects cannot be undone, and already running external processes are not killed.",
+    "The user quarantine decision is audited with scope=session. Other classifier/user decisions use scope=call. context.journal.session_gate describes the current checkpoint wait, not the durable quarantine store. The enforcement.user_quarantine value is persist_session_and_descendants_chat_only; user_reject describes cancellation of a single checkpoint.",
+    "In backend=stub, classifier timeout, unavailable service and invalid classifier responses remain fail-open under native harness permissions for sessions not already quarantined. Startup, form, connection and internal sensor failures reject affected tool operations while ordinary text conversation remains available.",
+    "options.enabled=false disables sensor enforcement after the OpenCode process or service restarts. It does not delete quarantine markers; re-enabling resumes saved quarantine. Tools outside the local hooks, late plugin mutations and in-flight side effects remain coverage limitations.",
+    "Already active local session quarantine is enforced in both backends. Agent Monitor does not create native approval forms or offer a local policy override; its existing service approval and fail-closed policy remain independent of stub UI choices."
   ],
-  "supported_contract_versions": [
-    "2.1.0",
-    "2.2.0"
-  ],
+  "supported_contract_versions": ["2.1.0", "2.2.0", "2.3.0"],
   "monitor_extension": {
     "version": "2.2.0",
     "backend": "agent_monitor",
-    "enforcement": "Optional backend with a fail-closed evaluate/start/results lifecycle. Hard BLOCK rejects only the current call with no local override; later safe calls remain available. Approvals belong to the service. Incomplete monitor state, approval rejection/expiry, start failure or failed result reporting poisons the monitored run. The default 2.1.0 stub continues to use call-scoped quarantine and native session forms.",
+    "enforcement": "Optional backend with a fail-closed evaluate/start/results lifecycle. Hard BLOCK rejects only the current call with no local override; later safe calls remain available. Approvals belong to the service. Incomplete monitor state, approval rejection/expiry, start failure or failed result reporting poisons the monitored run. The default 2.3.0 stub uses native session forms with one-checkpoint allow or explicit persistent session quarantine. Neither native choice is offered in monitor mode; existing local quarantine remains enforced independently of monitor policy.",
     "post_reporting": "A successful result acknowledgement updates sensitivity and audit state; it is not an independent post-result safety verdict.",
     "context": "Full rich snapshots remain in local audit. Bounded prompt/context projections and exact action/result are sent to authenticated monitor endpoints.",
     "identity": "Monitor run ID comes from private credentials and differs from snapshot.run_id. Direct messageID:id call identity; delegation/Code Mode unsupported.",

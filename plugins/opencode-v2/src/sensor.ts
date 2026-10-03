@@ -8,6 +8,7 @@ import { isAbsolute, join, resolve } from "node:path";
 import { NativeApprovalUI } from "./native-approvals.js";
 import { createNativeFormsClient } from "./native-client.js";
 import { AuditLog } from "./audit.js";
+import { QuarantineStore } from "./quarantine-store.js";
 import { denyAllClassifier, type Classifier } from "./classifier.js";
 import { ContextCollector } from "./collector.js";
 import { ActionRejectedError, quarantineMessage, type QuarantineCause } from "./gates.js";
@@ -39,9 +40,11 @@ export interface SensorOptions extends MonitorOptions {
 
 export type SensorInput = Plugin.Context;
 
+export type ApprovalDecision = "allow" | "quarantine" | "reject";
+
 export interface ApprovalUI {
   start(): Promise<void>;
-  ask(request: ClassifierRequest, response: ClassifierResponse): Promise<"allow" | "reject">;
+  ask(request: ClassifierRequest, response: ClassifierResponse): Promise<ApprovalDecision>;
   cancelSession(sessionIDs: string[]): void;
   close(): Promise<void>;
 }
@@ -135,6 +138,15 @@ export async function createSensor(
       : join(homedir(), ".local", "state", "opencode-sensor-v2", workspaceHash, instanceID);
   const collector = new ContextCollector({ ctx, apiTimeoutMs });
   const audit = new AuditLog(stateDirectory);
+  // Session IDs are host-wide. Use a stable store shared by workspace instances,
+  // so reloads and delegated sessions cannot silently leave quarantine.
+  const quarantine = new QuarantineStore(
+    typeof options.stateDirectory === "string" && isAbsolute(options.stateDirectory)
+      ? join(stateDirectory, "quarantine")
+      : join(homedir(), ".local", "state", "opencode-sensor-v2", "quarantine"),
+  );
+  const quarantinedHere = new Set<string>();
+  const parents = new Map<string, string | null>();
   const classifier = dependencies.classifier ?? denyAllClassifier;
   let sequence = 0;
   let closed = false;
@@ -172,6 +184,72 @@ export async function createSensor(
       onNotice: (message) => notice(message),
     });
 
+  async function isQuarantined(sessionID: string): Promise<boolean> {
+    const seen = new Set<string>();
+    let current: string | null = sessionID;
+    while (current) {
+      if (seen.has(current) || seen.size >= 64) throw new Error("Invalid session ancestry");
+      seen.add(current);
+      if (quarantinedHere.has(current) || (await quarantine.isQuarantined(current))) return true;
+      if (!parents.has(current)) {
+        const known = collector.knownParents.get(current);
+        if (known !== undefined) parents.set(current, known);
+        else {
+          const controller = new AbortController();
+          let timer: ReturnType<typeof setTimeout> | undefined;
+          try {
+            const info: { id: string; parentID?: string } = await Promise.race([
+              ctx.session.get({ sessionID: current }, { signal: controller.signal }),
+              new Promise<never>((_, reject) => {
+                timer = setTimeout(() => {
+                  controller.abort();
+                  reject(new Error("Session ancestry timeout"));
+                }, apiTimeoutMs);
+              }),
+            ]);
+            if (
+              !info ||
+              info.id !== current ||
+              (info.parentID != null && typeof info.parentID !== "string")
+            )
+              throw new Error("Session ancestry unavailable");
+            parents.set(current, info.parentID ?? null);
+          } finally {
+            if (timer) clearTimeout(timer);
+          }
+        }
+      }
+      current = parents.get(current)!;
+    }
+    // A concurrent answer may have arrived during an ancestry/storage read.
+    return [...seen].some((id) => quarantinedHere.has(id));
+  }
+
+  function knownDescendants(sessionID: string): string[] {
+    const ids = new Set([sessionID]);
+    const lineage = new Map([...collector.knownParents, ...parents]);
+    for (let changed = true; changed;) {
+      changed = false;
+      for (const [id, parent] of lineage)
+        if (parent && ids.has(parent) && !ids.has(id)) {
+          ids.add(id);
+          changed = true;
+        }
+    }
+    return [...ids];
+  }
+
+  function locallyQuarantined(sessionID: string): boolean {
+    const seen = new Set<string>();
+    let current: string | null | undefined = sessionID;
+    while (current && !seen.has(current)) {
+      if (quarantinedHere.has(current)) return true;
+      seen.add(current);
+      current = parents.get(current) ?? collector.knownParents.get(current);
+    }
+    return false;
+  }
+
   function cancelCurrentCheckpoints(sessionID: string): void {
     // Invalidate only work already in flight. A later call in this same session
     // gets a fresh checkpoint and its own approval, without an unblock/reset.
@@ -188,6 +266,7 @@ export async function createSensor(
     source: "plugin.classifier" | "plugin.user_override" | "plugin.monitor",
     decision: string,
     reason: string | null,
+    scope: "call" | "session" = "call",
   ): Promise<void> {
     const entry = {
       decision_id: id("decision"),
@@ -200,7 +279,7 @@ export async function createSensor(
       phase: request.phase,
       decision,
       reason,
-      scope: "call",
+      scope,
       binding_digest: request.decision_binding.digest,
       decided_at_ms: Date.now(),
       native: source === "plugin.monitor" ? { monitor_run_id: monitor?.monitorRunID } : null,
@@ -269,12 +348,23 @@ export async function createSensor(
     let key: string | undefined;
     let call: Invocation | undefined;
     let released = false;
+    let monitorStartAttempted = false;
     let monitorCall:
       { callID: string; tool: string; decision?: MonitorDecision; signal: AbortSignal } | undefined;
     const ensureCurrent = () => {
       if (startupFailure) throw reject("startup_failure");
+      if (locallyQuarantined(sessionID)) throw reject("session_quarantined");
       if (closed || pending.cancelled || call?.cancelled) throw reject("cancelled");
       if (monitor?.isBroken) throw reject("monitor_failure");
+    };
+    const ensureToolAccess = async () => {
+      try {
+        if (await isQuarantined(sessionID)) throw reject("session_quarantined");
+      } catch (error) {
+        if (error instanceof ActionRejectedError) throw error;
+        throw reject("quarantine_unavailable");
+      }
+      ensureCurrent();
     };
     try {
       // Detach before any SDK or approval await; bindings never follow mutations.
@@ -308,6 +398,7 @@ export async function createSensor(
       }
       if (!startupResolved) await startup;
       ensureCurrent();
+      await ensureToolAccess();
       if (monitor) {
         await monitor.checkSession(ctx, sessionID);
         const controller = new AbortController();
@@ -349,7 +440,7 @@ export async function createSensor(
       ensureCurrent();
       const request = bindRequest({
         contract: "opencode-plugin-classifier",
-        contract_version: monitor ? "2.2.0" : "2.1.0",
+        contract_version: monitor ? "2.2.0" : "2.3.0",
         request_id: id("req"),
         phase,
         harness: { name: "opencode", version: ctx.app.version, plugin_api: "v2" },
@@ -397,7 +488,9 @@ export async function createSensor(
             : "reject_tool_call_or_withhold_result",
           user_no_response: monitor ? "keep_blocked" : "keep_checkpoint_pending",
           classifier_timeout_ms: monitor ? apiTimeoutMs : classifierTimeoutMs,
-          ...(monitor ? { backend: "agent_monitor", monitor_run_id: monitor.monitorRunID } : {}),
+          ...(monitor
+            ? { backend: "agent_monitor", monitor_run_id: monitor.monitorRunID }
+            : { user_quarantine: "persist_session_and_descendants_chat_only" }),
         },
       });
       try {
@@ -430,7 +523,7 @@ export async function createSensor(
           );
           while (decision.decision === "REQUIRE_APPROVAL") {
             await delay(500, undefined, { signal: monitorCall.signal });
-            ensureCurrent();
+            await ensureToolAccess();
             decision = await monitor.evaluate(
               sessionID,
               monitorCall.callID,
@@ -455,7 +548,7 @@ export async function createSensor(
         monitorCall.decision = decision;
       } else if (!monitor) {
         const response = await classify(request);
-        ensureCurrent();
+        await ensureToolAccess();
         if (response.status === "unavailable") {
           await record(
             request,
@@ -470,16 +563,61 @@ export async function createSensor(
           await record(request, "plugin.classifier", response.decision!, response.reason);
           ensureCurrent();
           if (response.decision === "deny") {
-            let decision: "allow" | "reject";
+            let decision: ApprovalDecision;
             try {
-              decision = await approvals.ask(request, response);
+              await ensureToolAccess();
+              const waiting = new AbortController();
+              // Another workspace instance may quarantine an ancestor while this
+              // form is pending. Release the wait as a refusal, without stopping
+              // the model or requiring the user to answer obsolete cards.
+              const watchQuarantine = async (): Promise<never> => {
+                while (true) {
+                  await delay(300, undefined, { signal: waiting.signal });
+                  try {
+                    await ensureToolAccess();
+                  } catch (error) {
+                    approvals.cancelSession([sessionID]);
+                    throw error;
+                  }
+                }
+              };
+              try {
+                decision = await Promise.race([
+                  approvals.ask(request, response),
+                  watchQuarantine(),
+                ]);
+              } finally {
+                waiting.abort();
+              }
             } catch (error) {
               // A UI failure is not a classifier outage and must never auto-allow.
-              ensureCurrent();
+              if (error instanceof ActionRejectedError) throw error;
+              await ensureToolAccess();
               notify(error instanceof Error ? error.message : "Approval UI failed", "error");
               throw reject("confirmation_unavailable", response.reason);
             }
-            ensureCurrent();
+            if (decision === "quarantine") {
+              ensureCurrent();
+              // Latch synchronously before any I/O; pending siblings cannot race an
+              // allow against this decision. Cancelling cards never aborts the LLM.
+              quarantinedHere.add(sessionID);
+              approvals.cancelSession(knownDescendants(sessionID));
+              let saved = true;
+              try {
+                await quarantine.activate(sessionID);
+              } catch {
+                saved = false;
+              }
+              await record(
+                request,
+                "plugin.user_override",
+                "deny",
+                "Пользователь выбрал режим карантина: только общение, все инструменты заблокированы.",
+                "session",
+              );
+              throw reject(saved ? "user_quarantined" : "quarantine_unavailable", response.reason);
+            }
+            await ensureToolAccess();
             if (decision === "reject") {
               await record(
                 request,
@@ -498,7 +636,7 @@ export async function createSensor(
           }
         }
       }
-      ensureCurrent();
+      await ensureToolAccess();
       // Never release an approval for a different mutable value than displayed.
       const liveOutput = jsonCopy(toolOutput(phase, hookInput));
       if (
@@ -509,6 +647,7 @@ export async function createSensor(
       }
       if (monitor && monitorCall) {
         if (phase === "pre_tool_call") {
+          monitorStartAttempted = true;
           await monitor.start(
             sessionID,
             monitorCall.callID,
@@ -549,13 +688,28 @@ export async function createSensor(
         )
           throw reject("snapshot_changed");
       }
+      await ensureToolAccess();
+      if (
+        digest(originalInput) !== digest(snapshotToolEvent(hookInput)) ||
+        digest(originalOutput) !== digest(jsonCopy(toolOutput(phase, hookInput)))
+      )
+        throw reject("snapshot_changed");
+      // No await between the final local guard and release.
+      ensureCurrent();
       released = true;
     } catch (error) {
       // Policy refusals are complete decisions for one call. An integrity gap is
       // different: no further model/tool hooks may use this monitor instance.
+      const quarantineRefusal =
+        error instanceof ActionRejectedError &&
+        ["session_quarantined", "user_quarantined"].includes(error.quarantineCause);
       if (
         monitor &&
-        !(error instanceof ActionRejectedError && error.quarantineCause === "monitor_blocked")
+        !(
+          error instanceof ActionRejectedError &&
+          (error.quarantineCause === "monitor_blocked" ||
+            (quarantineRefusal && phase === "pre_tool_call" && !monitorStartAttempted))
+        )
       ) {
         monitor.poison();
         for (const { controller } of monitorControllers.values()) controller.abort();
@@ -563,7 +717,8 @@ export async function createSensor(
           "Agent Monitor: выполнение остановлено из-за неполного состояния. Зарегистрируйте новую задачу и перезапустите плагин.",
           "error",
         );
-        if (!(error instanceof ActionRejectedError)) throw reject("monitor_failure");
+        if (!(error instanceof ActionRejectedError) || quarantineRefusal)
+          throw reject("monitor_failure");
       }
       if (error instanceof ActionRejectedError) throw error;
       notify(
@@ -679,6 +834,27 @@ export async function createSensor(
     hooks[`session.${name}`] = async (event: Native) => {
       // These hooks observe context. Only a concrete tool checkpoint can refuse
       // work; a prior refusal must never block the user's next model request.
+      if (!monitorMode && (closed || startupFailure)) return;
+      const textOnly = async () => {
+        if (!["context", "compaction", "generate"].includes(name)) return;
+        let blocked = true;
+        try {
+          blocked = await isQuarantined(event.sessionID);
+        } catch {
+          notify("Не удалось проверить карантин: доступен только чат.");
+        }
+        if (blocked) {
+          event.tools = {};
+          const reminder =
+            "Режим карантина: доступно только общение. Все инструменты отключены; отвечайте текстом без попыток вызвать инструменты.";
+          if (
+            Array.isArray(event.system) &&
+            !event.system.some((part: Native) => part.type === "text" && part.text === reminder)
+          )
+            event.system.push({ type: "text", text: reminder });
+        }
+      };
+      await textOnly();
       if (monitorMode) {
         if (!startupResolved) await startup;
         if (closed || startupFailure || !monitor)
@@ -719,6 +895,7 @@ export async function createSensor(
           notify("Не удалось записать наблюдение контекста модели.", "error");
         }
       }
+      await textOnly();
     };
   }
   hooks["permission.evaluate"] = async (event: Native) => {

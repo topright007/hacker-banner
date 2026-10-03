@@ -32,6 +32,8 @@ const executable = process.env.OPENCODE_BIN ?? join(packageDirectory, "node_modu
 const pluginPackage = resolve(process.env.SENSOR_PLUGIN_PACKAGE ?? packageDirectory);
 const stageTimeoutMs = Number(process.env.SMOKE_TIMEOUT_MS ?? 60_000);
 const pause = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+const quarantinesSession = (scenario: Scenario) =>
+  scenario === "reject-pre" || scenario === "reject-post";
 
 async function exists(path: string): Promise<boolean> {
   try {
@@ -84,21 +86,27 @@ async function pending(client: NativeClient, directory: string): Promise<Approva
     assert.equal(typeof metadata.phase, "string");
     assert.equal(typeof metadata.binding_digest, "string");
     assert.equal(typeof metadata.tool, "string");
-    assert.ok(detail.title.includes("Карантин"));
+    assert.ok(detail.title.startsWith("Предупреждение:"));
     assert.equal(detail.fields.length, 1);
     const field = detail.fields[0];
     assert.equal(field.key, "decision");
-    assert.ok(field.title?.includes("Карантин"));
-    assert.ok(field.title?.includes(metadata.tool as string));
+    assert.equal(field.title, detail.title);
     assert.equal(field.type, "string");
     assert.equal(field.required, true);
     assert.equal("default" in field, false, "Native approval must not have a default answer");
     assert.ok(field.type === "string" && field.custom === false);
     assert.deepEqual(
-      field.options?.map((option) => option.value),
-      ["reject", "allow"],
+      field.options?.map(({ value, label }) => ({ value, label })),
+      [
+        { value: "quarantine", label: "Продолжить в режиме карантина" },
+        { value: "allow", label: "Довериться и продолжить" },
+      ],
     );
-    assert.ok(field.description?.includes("Тестовая заглушка классификатора"));
+    const description = field.description?.split("\n");
+    assert.equal(description?.length, 2, "Native warning should have exactly three visible lines");
+    assert.equal(JSON.parse(description![0].slice("Инструмент: ".length)), metadata.tool);
+    assert.match(description![1], /^Причина: /);
+    assert.ok(JSON.parse(description![1].slice("Причина: ".length)).includes("Тестовая заглушка"));
     result.push({
       id: form.id,
       request_id: metadata.request_id as string,
@@ -114,7 +122,7 @@ async function pending(client: NativeClient, directory: string): Promise<Approva
 async function decide(
   client: NativeClient,
   approval: Approval,
-  decision: "allow" | "reject" | "cancel",
+  decision: "allow" | "quarantine" | "cancel",
 ) {
   const input = { sessionID: approval.session_id, formID: approval.id };
   if (decision === "cancel") {
@@ -135,6 +143,7 @@ function assertQuarantineFeedback(
   tool: string,
   phase: "pre" | "post",
   errorOutcome = false,
+  sessionQuarantined = true,
 ) {
   const result = messages.find((message) => message.tool_call_id === "call_smoke_first");
   assert.ok(result, "Quarantined call feedback never reached the model");
@@ -148,23 +157,27 @@ function assertQuarantineFeedback(
   } catch {
     // A regular tool result is already plain text; native errors may use a JSON envelope.
   }
+  const lines = feedback.split("\n");
+  assert.equal(lines.length, 3, "Tool feedback must stay within three readable lines");
   assert.ok(
-    feedback.includes(
+    lines[0].startsWith(
       phase === "pre"
-        ? "[OpenCode Sensor] Карантин: действие заблокировано."
-        : errorOutcome
-          ? "[OpenCode Sensor] Карантин: передача ошибки заблокирована."
-          : "[OpenCode Sensor] Карантин: передача результата заблокирована.",
+        ? "Предупреждение: вызов инструмента заблокирован."
+        : `Предупреждение: инструмент выполнен; передача ${errorOutcome ? "ошибки" : "результата"} заблокирована.`,
     ),
     "Model-bound quarantine feedback lost its action-specific status",
   );
-  assert.ok(feedback.includes(`Инструмент: ${JSON.stringify(tool)}`));
-  assert.ok(feedback.includes(`Этап: ${phase === "pre" ? "до выполнения" : "после выполнения"}`));
-  assert.match(feedback, /Причина:.*Тестовая заглушка классификатора отклоняет все операции/);
-  assert.ok(feedback.includes("Безопасность этого действия не проверялась."));
-  assert.ok(feedback.includes("Тестовый карантин"), "Stub denial was presented as a real attack");
-  assert.ok(feedback.includes("Сессия остаётся доступной."));
-  assert.ok(feedback.includes("Не повторяйте это действие без нового разрешения пользователя."));
+  assert.equal(
+    lines[0].includes("Режим карантина: доступен только чат; инструменты заблокированы."),
+    sessionQuarantined,
+  );
+  assert.match(lines[1], /^Инструмент: /);
+  assert.equal(JSON.parse(lines[1].slice("Инструмент: ".length)), tool);
+  assert.match(lines[2], /^Причина: /);
+  assert.equal(
+    JSON.parse(lines[2].slice("Причина: ".length)),
+    "Тестовая заглушка отклоняет все операции; безопасность не проверялась.",
+  );
 }
 
 async function assertAuditContext(directory: string, approval: Approval, label: string) {
@@ -174,7 +187,7 @@ async function assertAuditContext(directory: string, approval: Approval, label: 
   assert.equal(request.request_id, approval.request_id);
   assert.equal(request.phase, approval.phase);
   assert.equal(request.decision_binding.digest, approval.binding_digest);
-  assert.equal(request.contract_version, "2.1.0");
+  assert.equal(request.contract_version, "2.3.0");
   assert.equal(request.harness.version, "2.0.22");
   const call = request.current_call;
   assert.ok(call.tool_call_id);
@@ -250,6 +263,7 @@ async function mockModel(
 ) {
   const allRequests: Json[] = [];
   const primaryRequests: Json[] = [];
+  const quarantineRequests: Json[] = [];
   const failures: string[] = [];
   const server = createServer(async (request, response) => {
     try {
@@ -275,6 +289,20 @@ async function mockModel(
           (item: Json) => item.role === "tool" && !item.tool_call_id?.startsWith("call_warmup"),
         );
       const firstCall = results.length === 0;
+      // Auxiliary title requests have no tool results or follow-up control
+      // marker. Quarantined primary requests still need a normal text answer,
+      // even though the harness no longer advertises tools to the model.
+      if (quarantinesSession(scenario) && (followup || !firstCall)) {
+        primaryRequests.push(body);
+        quarantineRequests.push(body);
+        complete(
+          response,
+          body,
+          { role: "assistant", content: followup ? "SMOKE_FOLLOWUP_COMPLETE" : "SMOKE_COMPLETE" },
+          "stop",
+        );
+        return;
+      }
       const callKind = followup || (!firstCall && scenario !== "approve") ? "shell" : toolKind;
       const tool = body.tools?.find((item: Json) =>
         callKind === "read-error"
@@ -383,6 +411,7 @@ async function mockModel(
     server,
     allRequests,
     primaryRequests,
+    quarantineRequests,
     failures,
     baseURL: `http://127.0.0.1:${address.port}/v1`,
   };
@@ -460,20 +489,18 @@ async function runScenario(
   brokenStartup = false,
   disabled = false,
   managedService = false,
+  restartQuarantine = false,
 ) {
-  if (
-    process.env.SMOKE_CASES &&
-    !process.env.SMOKE_CASES.split(",").includes(
-      managedService
-        ? "managed-service"
-        : disabled
-          ? "disabled"
-          : brokenStartup
-            ? "startup-failure"
-            : `${toolKind}/${scenario}`,
-    )
-  )
-    return;
+  const caseName = restartQuarantine
+    ? "quarantine-restart"
+    : managedService
+      ? "managed-service"
+      : disabled
+        ? "disabled"
+        : brokenStartup
+          ? "startup-failure"
+          : `${toolKind}/${scenario}`;
+  if (process.env.SMOKE_CASES && !process.env.SMOKE_CASES.split(",").includes(caseName)) return;
   const temporary = await mkdtemp(join(tmpdir(), `opencode-sensor-v2-${scenario}-`));
   const workdir = join(temporary, "workspace");
   const stateDirectory = join(temporary, "sensor");
@@ -594,19 +621,16 @@ async function runScenario(
       OPENCODE_DISABLE_MODELS_FETCH: "true",
       OPENCODE_PASSWORD: randomBytes(24).toString("hex"),
     };
-    serverState = startProcess(
-      [
-        "serve",
-        ...(managedService ? ["--service"] : []),
-        "--hostname",
-        "127.0.0.1",
-        "--port",
-        String(address.port),
-        "--print-logs",
-      ],
-      workdir,
-      environment,
-    );
+    const serverArguments = [
+      "serve",
+      ...(managedService ? ["--service"] : []),
+      "--hostname",
+      "127.0.0.1",
+      "--port",
+      String(address.port),
+      "--print-logs",
+    ];
+    serverState = startProcess(serverArguments, workdir, environment);
     const endpoint = managedService
       ? await poll(
           "managed OpenCode service registration",
@@ -639,7 +663,7 @@ async function runScenario(
       },
       serverState,
     );
-    const state = serverState;
+    let state = serverState;
     const session = await client.session.create({
       location: { directory: workdir },
       model: { providerID: "sensor-smoke", id: "deterministic" },
@@ -728,12 +752,11 @@ async function runScenario(
           request.messages.some(
             (message: Json) =>
               message.role === "tool" &&
-              JSON.stringify(message.content).includes("Карантин: действие заблокировано.") &&
-              JSON.stringify(message.content).includes("Сенсор не готов к проверке действия.") &&
               JSON.stringify(message.content).includes(
-                "Это техническая отмена проверки, а не сообщение об обнаруженной атаке.",
+                "Предупреждение: вызов инструмента заблокирован.",
               ) &&
-              JSON.stringify(message.content).includes("Сессия остаётся доступной."),
+              JSON.stringify(message.content).includes("Сенсор не готов к проверке действия.") &&
+              JSON.stringify(message.content).includes("Инструмент:"),
           ),
         ),
         "Startup failure did not become a safe tool error",
@@ -770,7 +793,7 @@ async function runScenario(
     await assertAuditContext(stateDirectory, pre, `${scenario}/pre`);
 
     if (scenario === "reject-pre" || scenario === "cancel-pre") {
-      await decide(client, pre, scenario === "cancel-pre" ? "cancel" : "reject");
+      await decide(client, pre, scenario === "cancel-pre" ? "cancel" : "quarantine");
     } else {
       await decide(client, pre, "allow");
       const post = await poll(
@@ -806,10 +829,10 @@ async function runScenario(
         resultRequestCount,
         "Tool results reached a model request while the post approval was pending",
       );
-      await decide(client, post, scenario === "approve" ? "allow" : "reject");
+      await decide(client, post, scenario === "approve" ? "allow" : "quarantine");
     }
 
-    if (scenario !== "approve") {
+    if (scenario === "cancel-pre") {
       await approveIndependentCall(
         client,
         workdir,
@@ -837,12 +860,69 @@ async function runScenario(
     } else if (scenario === "reject-pre" || scenario === "cancel-pre") {
       assert.equal(await exists(marker), false, "Rejected operation created its marker");
       assert.equal(resultForwarded, false, "Rejected pre call produced a private result");
-      assertQuarantineFeedback(forwardedResults, pre.tool, "pre");
+      assertQuarantineFeedback(forwardedResults, pre.tool, "pre", false, scenario === "reject-pre");
     } else {
       assert.equal(resultForwarded, false, "Rejected post result reached the model");
       assertQuarantineFeedback(forwardedResults, pre.tool, "post", toolKind === "read-error");
     }
-    if (scenario !== "approve") {
+    if (quarantinesSession(scenario)) {
+      assert.equal(await exists(nextMarker), false, "Quarantined session ran another tool");
+      assert.ok(model.quarantineRequests.length > 0, "Quarantine prevented text continuation");
+      assert.ok(
+        model.quarantineRequests.every((request) => (request.tools?.length ?? 0) === 0),
+        "Quarantined model request still advertised tools",
+      );
+      assert.deepEqual(await pending(client, workdir), [], "Quarantine created another approval");
+      const checkpointFiles = (await readdir(join(stateDirectory, "requests"))).sort();
+      if (restartQuarantine) {
+        assert.equal(managedService, false, "Restart fixture expects the explicit endpoint");
+        const previousPID = serverState.child.pid;
+        await stopProcess(serverState);
+        serverState = startProcess(serverArguments, workdir, environment);
+        state = serverState;
+        await poll(
+          "restarted OpenCode server",
+          async () => {
+            try {
+              const info = await client.server.info({ signal: AbortSignal.timeout(2_000) });
+              if (info.pid !== state.child.pid) return undefined;
+              assert.notEqual(info.pid, previousPID);
+              return true;
+            } catch {
+              return undefined;
+            }
+          },
+          state,
+        );
+      }
+      const priorQuarantineRequests = model.quarantineRequests.length;
+      await client.session.prompt({
+        sessionID: session.id,
+        text: "Run the follow-up smoke operation in this same session, then finish. FOLLOW_UP_TURN",
+      });
+      await waitForTurn("SMOKE_FOLLOWUP_COMPLETE");
+      assert.ok(model.quarantineRequests.length > priorQuarantineRequests);
+      assert.ok(
+        model.quarantineRequests.every((request) => (request.tools?.length ?? 0) === 0),
+        "A later turn restored tools in the quarantined session",
+      );
+      assert.equal(await exists(followupMarker), false, "Quarantine did not block later tools");
+      assert.equal(await exists(nextMarker), false);
+      assert.deepEqual(
+        (await readdir(join(stateDirectory, "requests"))).sort(),
+        checkpointFiles,
+        "A quarantined session started another classifier checkpoint",
+      );
+      assert.deepEqual(model.failures, []);
+      assert.equal(
+        forwardedToolResults().some((message) =>
+          JSON.stringify(message.content).includes(sentinel),
+        ),
+        false,
+        "Quarantined private result resurfaced in the next user turn",
+      );
+    }
+    if (scenario === "cancel-pre") {
       assert.equal(await readFile(nextMarker, "utf8"), "independent");
       assert.ok(
         forwardedResults.some((message) =>
@@ -894,9 +974,7 @@ async function runScenario(
       "Native approval remained pending after completion",
     );
     passed = true;
-    console.log(
-      `PASS ${managedService ? "managed-service" : `${toolKind}/${scenario}`}: ${model.primaryRequests.length} primary model request(s)`,
-    );
+    console.log(`PASS ${caseName}: ${model.primaryRequests.length} primary model request(s)`);
   } catch (error) {
     await writeFile(
       join(temporary, "opencode.log"),
@@ -955,3 +1033,4 @@ await runScenario("approve", "shell", true);
 await runScenario("approve", "none");
 await runScenario("approve", "shell", false, true);
 await runScenario("approve", "shell", false, false, true);
+await runScenario("reject-pre", "shell", false, false, false, true);

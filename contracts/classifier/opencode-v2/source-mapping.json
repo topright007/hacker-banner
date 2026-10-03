@@ -46,11 +46,37 @@
       "path": "/context/workspace",
       "api": "ctx.location, ctx.vcs.get/status/base, ctx.worktree.list",
       "source": "https://github.com/anomalyco/opencode/blob/v2.0.22/packages/plugin/src/promise/vcs.ts"
+    },
+    {
+      "path": "/enforcement",
+      "api": "Plugin policy: per-checkpoint allow/cancel and explicit persistent session quarantine; native form labels are quarantine/allow choices",
+      "source": "plugins/opencode-v2/src/sensor.ts"
+    },
+    {
+      "path": "/context/journal/approval_decisions",
+      "api": "Plugin-owned audit observations; quarantine choices use scope=session, remaining decisions scope=call",
+      "source": "plugins/opencode-v2/src/sensor.ts"
+    },
+    {
+      "path": "/enforcement/user_quarantine",
+      "api": "Persistent hashed session markers plus parentID-chain inheritance, separate from the classifier history snapshot",
+      "source": "plugins/opencode-v2/src/quarantine-store.ts"
+    },
+    {
+      "path": "/enforcement/monitor_run_id",
+      "api": "Agent Monitor run metadata projected from private credentials, with tokens and execution permits excluded",
+      "source": "plugins/opencode-v2/src/monitor.ts"
+    },
+    {
+      "path": "/enforcement",
+      "api": "For backend=agent_monitor: evaluate/start/results, trusted CLI approval, hard policy blocks and fail-closed run state; no native stub override",
+      "source": "plugins/opencode-v2/src/monitor.ts"
     }
   ],
   "package_tarballs": [
     "https://registry.npmjs.org/@opencode/plugin/-/plugin-2.0.22.tgz",
     "https://registry.npmjs.org/@opencode/client/-/client-2.0.22.tgz",
     "https://registry.npmjs.org/@opencode/schema/-/schema-2.0.22.tgz"
-  ]
+  ],
+  "contract_version": "2.3.0"
 }

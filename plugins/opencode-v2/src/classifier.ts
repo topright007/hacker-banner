@@ -11,8 +11,7 @@ export const denyAllClassifier: Classifier = async (request, signal) => {
   return responseFor(request, {
     status: "ok",
     decision: "deny",
-    reason:
-      "Тестовая заглушка классификатора отклоняет все операции. Безопасность этого действия не проверялась. Требуется ваше разовое подтверждение.",
+    reason: "Тестовая заглушка отклоняет все операции; безопасность не проверялась.",
     error: null,
   });
 };

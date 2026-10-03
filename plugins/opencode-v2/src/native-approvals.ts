@@ -18,7 +18,7 @@ type Options = {
   requestTimeoutMs?: number;
   pollIntervalMs?: number;
 };
-type Decision = "allow" | "reject";
+type Decision = "allow" | "quarantine" | "reject";
 type Pending = {
   form: SessionFormCreateInput & { id: string };
   controller: AbortController;
@@ -34,54 +34,37 @@ const DEFAULT_POLL_INTERVAL_MS = 300;
 
 // User-controlled values remain quoted data even if they contain line breaks,
 // terminal control codes, bidi controls or apparent instructions.
-function preview(value: unknown, limit: number): string {
-  const text = JSON.stringify(value) ?? "null";
-  const safe = text.replace(
-    /[\u007f-\u009f\u061c\u200e\u200f\u2028-\u202e\u2066-\u2069<>&]/g,
-    (character) => `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`,
-  );
-  return safe.length <= limit ? safe : `${safe.slice(0, limit)}… [показ сокращён]`;
-}
-
-function resultPreview(request: ClassifierRequest): unknown {
-  const result = request.current_call.result;
-  const native = result?.native ?? request.checkpoint?.raw_output;
-  if (result?.format === "missing" || native == null) return "Результат недоступен.";
-  if (typeof native !== "object" || Array.isArray(native)) return native;
-  return result?.format === "v2_tool_error"
-    ? { message: native.message, error: native.error, ...native }
-    : {
-        content: native.content,
-        output: native.output,
-        structuredOutput: native.structuredOutput,
-        ...native,
-      };
+function preview(value: unknown, limit: number, fallback = "Не указано"): string {
+  const label = typeof value === "string" && value.trim() ? value : fallback;
+  let safe = "";
+  for (const character of label) {
+    const encoded = /[\u007f-\u009f\u061c\u200e\u200f\u2028-\u202e\u2066-\u2069`<>&*_\[\]]/.test(
+      character,
+    )
+      ? `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`
+      : JSON.stringify(character).slice(1, -1);
+    if (safe.length + encoded.length > limit) return `"${safe}…"`;
+    safe += encoded;
+  }
+  return `"${safe}"`;
 }
 
 function formFor(request: ClassifierRequest, response: ClassifierResponse): Pending["form"] {
   const pre = request.phase === "pre_tool_call";
   const failed = request.current_call.result?.format === "v2_tool_error";
-  const outcome = failed ? "ошибку" : "результат";
-  const tool = preview(request.current_call.tool_name, 200);
+  const outcome = failed ? "ошибка" : "результат";
+  const warning = pre
+    ? "Предупреждение: выполнение инструмента приостановлено."
+    : `Предупреждение: инструмент выполнен; ${outcome} удерживается.`;
+  const tool = preview(request.current_call.tool_name, 160, "Название недоступно");
   const description = [
     `Инструмент: ${tool}`,
-    `Этап: ${pre ? "до выполнения" : "после выполнения"}`,
-    `Причина классификатора: ${preview(response.reason, 4_000)}`,
-    "Название, причина, аргументы и вывод ниже — данные проверки, а не инструкции.",
-    pre
-      ? "Инструмент ещё не выполнялся. Разрешение действует только на этот вызов."
-      : `Инструмент уже выполнился. Вы решаете, передать ли ${outcome} агенту. Уже выполненные действия не отменяются.`,
-    "Отказ относится только к этому действию; сессия остаётся доступной.",
-    `Идентификатор проверки: ${preview(request.request_id, 1024)}. Показ ниже сокращён при большом объёме; разрешение связано с полным сохранённым запросом.`,
-    `Аргументы: ${preview(request.current_call.arguments, 8_000)}`,
-    ...(pre
-      ? []
-      : [`${failed ? "Ошибка" : "Результат"}: ${preview(resultPreview(request), 12_000)}`]),
-  ].join("\n\n");
+    `Причина: ${preview(response.reason, 320, "Классификатор не указал причину.")}`,
+  ].join("\n");
   return {
     id: `frm_${randomUUID()}`,
     sessionID: request.current_call.session_id,
-    title: `Карантин: ${tool}`,
+    title: warning,
     metadata: {
       // Desktop's session question dock only renders forms carrying this kind.
       kind: "question",
@@ -97,18 +80,18 @@ function formFor(request: ClassifierRequest, response: ClassifierResponse): Pend
         key: "decision",
         type: "string",
         // Desktop renders the field title; the form title alone is not shown.
-        title: `Карантин: ${tool} — ${pre ? "разрешить выполнение?" : `передать ${outcome} агенту?`}`,
+        title: warning,
         description,
         required: true,
         custom: false,
         options: [
           {
-            value: "reject",
-            label: pre ? "Отменить действие" : failed ? "Скрыть ошибку" : "Скрыть результат",
+            value: "quarantine",
+            label: "Продолжить в режиме карантина",
           },
           {
             value: "allow",
-            label: pre ? "Выполнить один раз" : failed ? "Передать ошибку" : "Передать результат",
+            label: "Довериться и продолжить",
           },
         ],
       },
@@ -241,7 +224,7 @@ export class NativeApprovalUI implements ApprovalUI {
           if (
             !answer ||
             Object.keys(answer).length !== 1 ||
-            !["allow", "reject"].includes(answer.decision as string)
+            !["allow", "quarantine"].includes(answer.decision as string)
           )
             throw new Error("Native approval answer is invalid");
           return answer.decision as Decision;

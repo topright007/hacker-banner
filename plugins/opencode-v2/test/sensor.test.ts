@@ -14,14 +14,18 @@ import {
 import { ActionRejectedError } from "../src/gates.js";
 import type { Classifier } from "../src/classifier.js";
 import { MonitorBackend } from "../src/monitor.js";
+import { QuarantineStore } from "../src/quarantine-store.js";
 
 class UI implements ApprovalUI {
-  pending: { request: ClassifierRequest; resolve: (decision: "allow" | "reject") => void }[] = [];
+  pending: {
+    request: ClassifierRequest;
+    resolve: (decision: "allow" | "quarantine" | "reject") => void;
+  }[] = [];
   async start() {}
   async ask(
     request: ClassifierRequest,
     _response: ClassifierResponse,
-  ): Promise<"allow" | "reject"> {
+  ): Promise<"allow" | "quarantine" | "reject"> {
     return new Promise((resolve) => this.pending.push({ request, resolve }));
   }
   cancelSession(ids: string[]) {
@@ -208,7 +212,7 @@ const modelContext = (sessionID = "ses_test") => ({
   sessionID,
   agent: "build",
   model: { providerID: "test", id: "test-model" },
-  system: ["System"],
+  system: [{ type: "text", text: "System" }],
   messages: [{ role: "user", content: [{ type: "text", text: "Read README" }] }],
   options: {},
   tools: { read: { description: "Read files", input: { type: "object" } } },
@@ -225,7 +229,7 @@ test("registered V2 hooks hold each pre/post and persist bound context", async (
     await pending(f.ui, 1);
     assert.equal(done, false);
     const first = f.ui.pending[0].request;
-    assert.equal(first.contract_version, "2.1.0");
+    assert.equal(first.contract_version, "2.3.0");
     assert.equal(first.harness.plugin_api, "v2");
     assert.equal(first.current_call.message_id, input.messageID);
     assert.equal(first.current_call.identity.model.model_id, "test-model");
@@ -260,21 +264,15 @@ test("registered V2 hooks hold each pre/post and persist bound context", async (
   }
 });
 
-test("human pre rejection cancels only that call and later model/tool requests work", async () => {
+test("cancelled confirmation cancels only that call and later model/tool requests work", async () => {
   const f = await setup();
   try {
     const before = f.hooks["tool.execute.before"](structuredClone(input));
     const rejected = assert.rejects(before, (error: unknown) => {
       assert.ok(error instanceof ActionRejectedError);
-      assert.match(error.message, /Карантин: действие заблокировано/);
+      assert.match(error.message, /Предупреждение: вызов инструмента заблокирован/);
       assert.match(error.message, /Инструмент: "read"/);
-      assert.match(error.message, /Этап: до выполнения/);
-      assert.match(error.message, /Причина: "Тестовая заглушка классификатора/);
-      assert.match(error.message, /Тестовый карантин/);
-      assert.match(error.message, /Безопасность действия не проверялась/);
-      assert.match(error.message, /Этот вызов инструмента не выполнен/);
-      assert.match(error.message, /Пользователь отклонил разовое разрешение/);
-      assert.match(error.message, /Сессия остаётся доступной/);
+      assert.match(error.message, /Причина: "Тестовая заглушка/);
       assert.doesNotMatch(error.message, /Подозревается хакерская атака/);
       return true;
     });
@@ -357,11 +355,9 @@ test("post rejection removes all original result fields and permits continuation
     f.ui.pending[0].resolve("reject");
     await after;
     assert.deepEqual(Object.keys(event.result), ["content"]);
-    assert.match(String(event.result.content), /Карантин: передача результата заблокирована/);
+    assert.match(String(event.result.content), /передача результата заблокирована/);
     assert.match(String(event.result.content), /Инструмент: "read"/);
-    assert.match(String(event.result.content), /Этап: после выполнения/);
-    assert.match(String(event.result.content), /Причина: "Тестовая заглушка классификатора/);
-    assert.match(String(event.result.content), /уже выполненные действия не отменены/);
+    assert.match(String(event.result.content), /Причина: "Тестовая заглушка/);
     assert.doesNotMatch(JSON.stringify(event.result), /SECRET/);
     await f.hooks["session.context"](modelContext());
     const next = f.hooks["tool.execute.before"]({ ...input, id: "after_rejected_post" });
@@ -390,11 +386,9 @@ test("post rejection replaces the entire native tool error", async () => {
     await pending(f.ui, 1);
     f.ui.pending[0].resolve("reject");
     await after;
-    assert.match(event.error.message, /Карантин: передача ошибки заблокирована/);
+    assert.match(event.error.message, /передача ошибки заблокирована/);
     assert.match(event.error.message, /Инструмент: "read"/);
-    assert.match(event.error.message, /Этап: после выполнения/);
-    assert.match(event.error.message, /Причина: "Тестовая заглушка классификатора/);
-    assert.match(event.error.message, /Передача ошибки отклонена/);
+    assert.match(event.error.message, /Причина: "Тестовая заглушка/);
     assert.doesNotMatch(JSON.stringify(event.error), /SECRET/);
     assert.equal(event.error._tag, "Tool.Error");
     assert.equal(f.interrupts.length, 0);
@@ -432,12 +426,7 @@ test("real classifier denial details reach pre, result and error feedback", asyn
         message = outcome === "error" ? event.error.message : event.result.content;
       assert.match(message, /Инструмент: "read"/);
       assert.ok(message.includes(`Причина: ${JSON.stringify(reason)}`));
-      assert.match(
-        message,
-        /Подозревается хакерская атака; это предупреждение, а не подтверждённый факт/,
-      );
-      assert.match(message, /Сообщите пользователю название инструмента, причину и итог проверки/);
-      assert.match(message, /Сессия остаётся доступной/);
+      assert.equal(message.split("\n").length, 3);
       assert.doesNotMatch(message, /RAW_PRIVATE|Тестовый карантин/);
       assert.equal(f.interrupts.length, 0);
     } finally {
@@ -446,7 +435,7 @@ test("real classifier denial details reach pre, result and error feedback", asyn
   }
 });
 
-test("post confirmation failure preserves classifier reason without exposing diagnostics", async () => {
+test("post confirmation failure reports a brief technical cause without exposing diagnostics", async () => {
   const ui = new UI();
   ui.ask = async () => {
     throw new Error("PRIVATE_UI_DIAGNOSTIC");
@@ -462,9 +451,9 @@ test("post confirmation failure preserves classifier reason without exposing dia
   try {
     const event = { ...post(), result: { content: "PRIVATE_TOOL_OUTPUT" } };
     await f.hooks["tool.execute.after"](event);
-    assert.match(event.result.content, /Карантин: передача результата заблокирована/);
-    assert.match(event.result.content, /Причина: "Непроверенный внешний источник"/);
-    assert.match(event.result.content, /Подтверждение недоступно/);
+    assert.match(event.result.content, /передача результата заблокирована/);
+    assert.match(event.result.content, /Причина: "Форма подтверждения OpenCode недоступна/);
+    assert.equal(event.result.content.split("\n").length, 3);
     assert.doesNotMatch(
       event.result.content,
       /PRIVATE_|Подозревается хакерская атака|Пользователь отклонил/,
@@ -578,6 +567,14 @@ test("audit startup failure and invalid options retain a blocking plugin", async
     for (const options of [{ stateDirectory: file }, { classifierTimeoutMs: -1 }]) {
       const f = await setup(undefined, new UI(), options);
       try {
+        const context = modelContext();
+        const unchanged = structuredClone(context);
+        await f.registered.get("session.context")!(context);
+        assert.deepEqual(
+          context,
+          unchanged,
+          "Stub startup failure must not alter the model context or tool map",
+        );
         await assert.rejects(
           f.registered.get("tool.execute.before")!(structuredClone(input)),
           ActionRejectedError,
@@ -618,7 +615,7 @@ test("post mutation after approval hides the changed output without blocking ano
     f.ui.pending[0].resolve("allow");
     await after;
     assert.doesNotMatch(JSON.stringify(event.result), /UNAPPROVED_CHANGE/);
-    assert.match(String(event.result.content), /Карантин: передача результата заблокирована/);
+    assert.match(String(event.result.content), /передача результата заблокирована/);
     assert.match(String(event.result.content), /Аргументы или результат изменились/);
     assert.doesNotMatch(String(event.result.content), /Подозревается хакерская атака/);
     await f.hooks["session.context"](modelContext());
@@ -910,6 +907,282 @@ test("scalar, array and null options fail closed rather than bypassing setup", a
   }
 });
 
+test("explicit quarantine blocks parallel and child tools without interrupting text conversation", async () => {
+  const f = await setup(undefined, new UI(), {}, ({ sessions }) => {
+    sessions.ses_child = { ...sessions.ses_test, id: "ses_child", parentID: "ses_test" };
+    sessions.ses_other = { ...sessions.ses_test, id: "ses_other" };
+  });
+  try {
+    const first = f.hooks["tool.execute.before"]({ ...input, id: "quarantine" });
+    const sibling = f.hooks["tool.execute.before"]({ ...input, id: "sibling" });
+    const child = f.hooks["tool.execute.before"]({ ...input, sessionID: "ses_child", id: "child" });
+    const refused = [first, sibling, child].map((p) => assert.rejects(p, ActionRejectedError));
+    await pending(f.ui, 3);
+    f.ui.pending
+      .find((p) => p.request.current_call.tool_call_id === "quarantine")!
+      .resolve("quarantine");
+    // Even an already-submitted parallel allow cannot undo quarantine.
+    f.ui.pending.find((p) => p.request.current_call.tool_call_id === "sibling")!.resolve("allow");
+    await Promise.all(refused);
+    for (const sessionID of ["ses_test", "ses_child"]) {
+      for (const name of ["context", "compaction", "generate"]) {
+        const event = modelContext(sessionID);
+        await f.hooks[`session.${name}`](event);
+        assert.deepEqual(event.tools, {});
+        assert.match(event.system.map((part) => part.text).join("\n"), /только общение/);
+        assert.equal(event.messages.length, 1);
+      }
+      await assert.rejects(
+        f.hooks["tool.execute.before"]({ ...input, sessionID, id: "later" }),
+        /режим карантина/,
+      );
+      const result = { ...post(), sessionID };
+      await f.hooks["tool.execute.after"](result);
+      assert.doesNotMatch(JSON.stringify(result.result), /untrusted tool content/);
+      assert.match(String(result.result.content), /Режим карантина/);
+    }
+    assert.equal(f.ui.pending.length, 3, "Quarantine must not ask again");
+    const unrelated = modelContext("ses_other");
+    await f.hooks["session.context"](unrelated);
+    assert.ok(unrelated.tools.read);
+    const other = f.hooks["tool.execute.before"]({ ...input, sessionID: "ses_other", id: "other" });
+    await pending(f.ui, 4);
+    f.ui.pending[3].resolve("allow");
+    await other;
+    assert.equal(f.interrupts.length, 0);
+    const decisions = (await readFile(join(f.directory, "decisions.jsonl"), "utf8"))
+      .trim()
+      .split("\n")
+      .map((x) => JSON.parse(x));
+    assert.equal(
+      decisions.filter((d) => d.source === "plugin.user_override" && d.scope === "session").length,
+      1,
+    );
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("post quarantine withholds the complete result/error and blocks all later tools", async () => {
+  for (const status of ["completed", "error"]) {
+    const f = await setup();
+    try {
+      const event: any =
+        status === "error"
+          ? {
+              ...input,
+              status,
+              error: Object.assign(new Error("PRIVATE_ERROR"), {
+                metadata: { secret: "PRIVATE_METADATA" },
+              }),
+            }
+          : {
+              ...post(),
+              result: {
+                content: "PRIVATE_RESULT",
+                metadata: { secret: "PRIVATE_METADATA" },
+                extension: "PRIVATE_EXTENSION",
+              },
+            };
+      const held = f.hooks["tool.execute.after"](event);
+      await pending(f.ui, 1);
+      f.ui.pending[0].resolve("quarantine");
+      await held;
+      assert.doesNotMatch(
+        JSON.stringify(status === "error" ? event.error : event.result),
+        /PRIVATE_/,
+      );
+      const message = status === "error" ? event.error.message : event.result.content;
+      assert.equal(message.split("\n").length, 3);
+      assert.match(message, /инструмент выполнен/);
+      await assert.rejects(
+        f.hooks["tool.execute.before"]({ ...input, id: "after_quarantine" }),
+        ActionRejectedError,
+      );
+      assert.equal(f.ui.pending.length, 1);
+      assert.equal(f.interrupts.length, 0);
+    } finally {
+      await f.cleanup();
+    }
+  }
+});
+
+test("quarantine survives completion, interruption and plugin restart, including unseen descendants", async () => {
+  const f = await setup();
+  let restarted: Record<string, any> | undefined;
+  try {
+    const refused = assert.rejects(
+      f.hooks["tool.execute.before"](structuredClone(input)),
+      ActionRejectedError,
+    );
+    await pending(f.ui, 1);
+    f.ui.pending[0].resolve("quarantine");
+    await refused;
+    for (const type of [
+      "session.execution.succeeded",
+      "session.execution.interrupted",
+      "session.execution.failed",
+    ])
+      f.hooks.event({ type, data: { sessionID: "ses_test" } });
+    await f.hooks.dispose();
+    const ctx = fixtureContext();
+    ctx.sessions.ses_new_child = {
+      ...ctx.sessions.ses_test,
+      id: "ses_new_child",
+      parentID: "ses_test",
+    };
+    let classifierCalls = 0;
+    const ui = new UI();
+    restarted = await createSensor(
+      ctx.ctx,
+      { stateDirectory: f.directory, apiTimeoutMs: 100 },
+      {
+        approvals: ui,
+        classifier: async () => {
+          classifierCalls++;
+          throw new Error("Unavailable");
+        },
+      },
+    );
+    for (const sessionID of ["ses_test", "ses_new_child"]) {
+      await assert.rejects(
+        restarted["tool.execute.before"]({ ...input, sessionID }),
+        ActionRejectedError,
+      );
+      const event = modelContext(sessionID);
+      await restarted["session.context"](event);
+      assert.deepEqual(event.tools, {});
+    }
+    assert.equal(classifierCalls, 0, "Classifier fail-open must never bypass quarantine");
+    assert.equal(ui.pending.length, 0);
+  } finally {
+    await restarted?.dispose();
+    await f.cleanup();
+  }
+});
+
+test("quarantine arriving while another classifier waits prevents its later allow", async () => {
+  let release!: (response: ClassifierResponse) => void;
+  let delayedRequest: ClassifierRequest | undefined;
+  const f = await setup(
+    async (request) => {
+      if (request.current_call.tool_call_id === "delayed") {
+        delayedRequest = request;
+        return new Promise((resolve) => {
+          release = resolve;
+        });
+      }
+      return responseFor(request, {
+        status: "ok",
+        decision: "deny",
+        reason: "Untrusted input",
+        error: null,
+      });
+    },
+    new UI(),
+    { classifierTimeoutMs: 1000 },
+  );
+  try {
+    const quarantine = assert.rejects(
+      f.hooks["tool.execute.before"]({ ...input, id: "quarantine" }),
+      ActionRejectedError,
+    );
+    const delayed = assert.rejects(
+      f.hooks["tool.execute.before"]({ ...input, id: "delayed" }),
+      ActionRejectedError,
+    );
+    await pending(f.ui, 1);
+    for (let i = 0; i < 100 && !delayedRequest; i++) await delay(5);
+    assert.ok(delayedRequest);
+    f.ui.pending[0].resolve("quarantine");
+    await quarantine;
+    release(
+      responseFor(delayedRequest, {
+        status: "ok",
+        decision: "allow",
+        reason: "Allowed",
+        error: null,
+      }),
+    );
+    await delayed;
+    assert.equal(f.ui.pending.length, 1);
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("unreadable quarantine state blocks tools but keeps the model conversation available", async () => {
+  const f = await setup(allow);
+  try {
+    await writeFile(join(f.directory, "quarantine"), "not a directory");
+    await assert.rejects(
+      f.hooks["tool.execute.before"](structuredClone(input)),
+      /Не удалось проверить или сохранить/,
+    );
+    const event = modelContext();
+    await f.hooks["session.context"](event);
+    assert.deepEqual(event.tools, {});
+    assert.equal(event.messages.length, 1);
+    assert.equal(f.ui.pending.length, 0);
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("failed quarantine persistence still blocks this instance immediately", async () => {
+  const f = await setup();
+  try {
+    const refused = assert.rejects(
+      f.hooks["tool.execute.before"](structuredClone(input)),
+      /Не удалось проверить или сохранить/,
+    );
+    await pending(f.ui, 1);
+    await writeFile(join(f.directory, "quarantine"), "not a directory");
+    f.ui.pending[0].resolve("quarantine");
+    await refused;
+    await assert.rejects(
+      f.hooks["tool.execute.before"]({ ...input, id: "next" }),
+      ActionRejectedError,
+    );
+    assert.equal(f.ui.pending.length, 1);
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("another plugin instance quarantines a pending form without another user answer", async () => {
+  const f = await setup();
+  const secondUI = new UI();
+  let second: Record<string, any> | undefined;
+  try {
+    second = await createSensor(
+      fixtureContext().ctx,
+      { stateDirectory: f.directory, apiTimeoutMs: 100 },
+      { approvals: secondUI },
+    );
+    const held = assert.rejects(
+      second["tool.execute.before"]({ ...input, id: "other_instance" }),
+      ActionRejectedError,
+    );
+    await pending(secondUI, 1);
+    const denied = assert.rejects(
+      f.hooks["tool.execute.before"](structuredClone(input)),
+      ActionRejectedError,
+    );
+    await pending(f.ui, 1);
+    f.ui.pending[0].resolve("quarantine");
+    await denied;
+    await held;
+    const event = modelContext();
+    await second["session.context"](event);
+    assert.deepEqual(event.tools, {});
+    assert.equal(secondUI.pending.length, 1);
+  } finally {
+    await second?.dispose();
+    await f.cleanup();
+  }
+});
+
 async function monitorSetup(responder?: (path: string, body: any) => unknown | Promise<unknown>) {
   const directory = await mkdtemp(join(tmpdir(), "sensor-monitor-"));
   const workspace = join(directory, "workspace");
@@ -1073,7 +1346,7 @@ test("monitor hard BLOCK cannot be overridden and cancels only the denied call",
     };
     await f.hooks["tool.execute.after"](deniedResult);
     assert.equal(deniedResult.error.message.includes("PRIVATE_HARNESS_ERROR"), false);
-    assert.match(deniedResult.error.message, /Карантин/);
+    assert.match(deniedResult.error.message, /Предупреждение:/);
     assert.equal(f.client.isBroken, false);
     assert.ok(!f.calls.some((c) => c.path === "/v1/results"));
     await f.hooks["session.model.request"]({ ...modelContext(), kind: "primary", headers: {} });
@@ -1202,7 +1475,7 @@ for (const failedPath of ["/v1/evaluate", "/v1/start", "/v1/results"]) {
         await f.hooks["tool.execute.after"](output);
         assert.deepEqual(Object.keys(output.result), ["content"]);
         assert.equal(typeof output.result.content, "string");
-        assert.match(String(output.result.content), /Карантин/);
+        assert.match(String(output.result.content), /Предупреждение:/);
         assert.equal(JSON.stringify(output.result).includes("untrusted tool content"), false);
       } else await assert.rejects(f.hooks["tool.execute.before"](structuredClone(input)));
       await assert.rejects(f.hooks["session.model.request"]({ sessionID: "ses_test" }));
@@ -1260,7 +1533,7 @@ for (const endpoint of ["/v1/start", "/v1/results"]) {
         const quarantined = (mutable as ReturnType<typeof post>).result;
         assert.deepEqual(Object.keys(quarantined), ["content"]);
         assert.equal(typeof quarantined.content, "string");
-        assert.match(String(quarantined.content), /Карантин/);
+        assert.match(String(quarantined.content), /Предупреждение:/);
         assert.equal(JSON.stringify(quarantined).includes("changed-during-report"), false);
       } else {
         await assert.rejects(f.hooks["tool.execute.before"](mutable), ActionRejectedError);
@@ -1293,5 +1566,104 @@ test("interruption while consuming a permit cannot release the tool", async () =
   } finally {
     release();
     await f.cleanup();
+  }
+});
+
+test("persisted quarantine before monitor execution blocks tools without poisoning a complete run", async () => {
+  const f = await monitorSetup();
+  try {
+    await new QuarantineStore(join(f.directory, "state", "quarantine")).activate("ses_test");
+    await assert.rejects(
+      f.hooks["tool.execute.before"](structuredClone(input)),
+      (error: unknown) =>
+        error instanceof ActionRejectedError && error.quarantineCause === "session_quarantined",
+    );
+    assert.equal(f.client.isBroken, false);
+    assert.equal(f.calls.length, 0, "No evaluation or permit can start after quarantine");
+    assert.equal(f.ui.pending.length, 0);
+    const context = modelContext();
+    await f.hooks["session.context"](context);
+    assert.deepEqual(context.tools, {});
+    assert.equal(f.client.isBroken, false);
+    assert.deepEqual(
+      f.calls.map((call) => call.path),
+      ["/v1/events"],
+    );
+    assert.equal(f.interrupts.length, 0);
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("quarantine while consuming a monitor permit cannot leave an incomplete run usable", async () => {
+  let store!: QuarantineStore;
+  let startAcknowledged = false;
+  const f = await monitorSetup(async (path) => {
+    if (path === "/v1/start") {
+      await store.activate("ses_test");
+      startAcknowledged = true;
+    }
+  });
+  store = new QuarantineStore(join(f.directory, "state", "quarantine"));
+  try {
+    let executed = false;
+    const call = f.hooks["tool.execute.before"](structuredClone(input)).then(() => {
+      executed = true;
+    });
+    await assert.rejects(
+      call,
+      (error: unknown) =>
+        error instanceof ActionRejectedError && error.quarantineCause === "monitor_failure",
+    );
+    assert.equal(startAcknowledged, true);
+    assert.equal(executed, false);
+    assert.equal(f.client.isBroken, true);
+    assert.deepEqual(
+      f.calls.map((entry) => entry.path),
+      ["/v1/evaluate", "/v1/start"],
+    );
+    await assert.rejects(f.hooks["session.model.request"]({ ...modelContext(), kind: "primary" }));
+    assert.equal(f.ui.pending.length, 0);
+    assert.equal(f.interrupts.length, 0);
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("quarantine before a monitor post report withholds results and poisons incomplete observation", async () => {
+  for (const status of ["completed", "error"] as const) {
+    const f = await monitorSetup();
+    try {
+      await f.hooks["tool.execute.before"](structuredClone(input));
+      assert.equal(f.client.isBroken, false);
+      await new QuarantineStore(join(f.directory, "state", "quarantine")).activate("ses_test");
+      const event: any =
+        status === "error"
+          ? { ...structuredClone(input), status, error: new Error("PRIVATE_MONITOR_ERROR") }
+          : {
+              ...post(),
+              result: {
+                content: "PRIVATE_MONITOR_RESULT",
+                metadata: { secret: "PRIVATE_METADATA" },
+              },
+            };
+      await f.hooks["tool.execute.after"](event);
+      assert.equal(f.client.isBroken, true);
+      const output = status === "error" ? event.error.message : event.result.content;
+      assert.match(output, /Agent Monitor недоступен или его состояние неполно/);
+      assert.doesNotMatch(
+        JSON.stringify(status === "error" ? event.error : event.result),
+        /PRIVATE_/,
+      );
+      assert.equal(output.split("\n").length, 3);
+      assert.ok(!f.calls.some((call) => call.path === "/v1/results"));
+      await assert.rejects(
+        f.hooks["session.model.request"]({ ...modelContext(), kind: "primary" }),
+      );
+      assert.equal(f.ui.pending.length, 0);
+      assert.equal(f.interrupts.length, 0);
+    } finally {
+      await f.cleanup();
+    }
   }
 });

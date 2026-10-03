@@ -1,6 +1,6 @@
 {
   "contract": "opencode-plugin-classifier",
-  "contract_version": "2.1.0",
+  "contract_version": "2.3.0",
   "request_id": "request",
   "phase": "post_tool_call",
   "harness": {
@@ -148,10 +148,7 @@
       "root_session_id": "root",
       "root_resolved": true,
       "mode": "current_ancestors_and_observed_descendants",
-      "discovered_session_ids": [
-        "root",
-        "child"
-      ],
+      "discovered_session_ids": ["root", "child"],
       "tree_complete": false
     },
     "sessions": [
@@ -362,9 +359,7 @@
         "child_session_id": "child",
         "delegation_depth": 1,
         "relation_source": "ctx.session.get.parentID",
-        "evidence_paths": [
-          "/context/sessions/1/native_info/value/parentID"
-        ],
+        "evidence_paths": ["/context/sessions/1/native_info/value/parentID"],
         "child_user_message_paths": [
           "/context/sessions/1/observed_messages/value/0"
         ]
@@ -489,9 +484,7 @@
                 "type": "string"
               }
             },
-            "required": [
-              "path"
-            ],
+            "required": ["path"],
             "additionalProperties": false,
             "$defs": {}
           },
@@ -838,9 +831,7 @@
       },
       "session_gate": {
         "state": "awaiting_classifier",
-        "scope_session_ids": [
-          "child"
-        ],
+        "scope_session_ids": ["child"],
         "reason": null
       }
     },
@@ -931,10 +922,11 @@
     "user_allow": "allow_once_for_bound_checkpoint",
     "user_reject": "reject_tool_call_or_withhold_result",
     "user_no_response": "keep_checkpoint_pending",
-    "classifier_timeout_ms": 1000
+    "classifier_timeout_ms": 1000,
+    "user_quarantine": "persist_session_and_descendants_chat_only"
   },
   "decision_binding": {
     "format": "sha256-rfc8785-request-without-decision_binding",
-    "digest": "45e276a8affd43173cfefdef5edba8c17579b7961d0cb6c60a0cb9460947cbaf"
+    "digest": "3265e4a77352f0c16e77a82ddfd342f6f32aa571d4d110a4e46d7236a51b4758"
   }
 }

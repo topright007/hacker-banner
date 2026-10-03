@@ -7,25 +7,37 @@ execution until the classifier or the user permits the operation.
 - Classifier contract: `contracts/classifier/opencode-v2`.
 - [Legacy V1 plugin — unsupported](plugins/opencode/README.md).
 
-Only V2 is maintained. The V1 implementation and contract remain in the repository
-for reference; they receive no further development or fixes. Use V2 for new installations.
+Only V2 is maintained. V1 remains for reference and receives no further development
+or fixes. Use V2 for new installations.
 
-The V2 plugin defaults to a local always-deny classifier stub with an explicit
-human override. The stub does not evaluate safety or send data to an external service.
+V2 release **0.4.0** uses classifier contract **2.3.0** for its default
+`backend: "stub"`. This always-deny local stub does not evaluate safety or send
+data to a service.
 
-V2 release **0.3.0** uses classifier contract **2.1.0** in stub mode and native OpenCode session
-forms for each denied operation, inside Desktop 2.0.22 or the interactive terminal
-interface. No browser or separate approval server is used. The plugin connects
-to its existing OpenCode service automatically. Noninteractive `opencode run`
-cancels forms; use the interactive interface for human approval.
-Continuing permits only the bound checkpoint. Cancelling
-before execution returns a typed `Tool.Error`, so the model can continue the
-conversation. Withholding after execution replaces the entire result or error
-with a safe placeholder; completed side effects are not undone. Stub decisions do not
-install a permanent session or session-tree lock, and unanswered checkpoints stay
-pending. Startup/internal sensor failures cancel tool operations while ordinary
-text conversation remains available. Explicit `options.enabled: false` still
-requires restarting OpenCode. See the V2 installation guide for details.
+In stub mode, warnings appear as native session forms inside Desktop 2.0.22 or the interactive
+terminal interface. They show only a warning, the tool name, and the reason, with
+exactly two choices:
+
+1. **«Продолжить в режиме карантина»** — persist chat-only quarantine for this
+   session and its descendants linked by `parentID`. Later tools are blocked
+   automatically without further approvals. Quarantine survives service restarts;
+   unrelated new sessions remain available. Fork provenance alone does not imply
+   parent-child inheritance.
+2. **«Довериться и продолжить»** — permit this bound checkpoint once. Pre and post
+   approvals are independent, so the stub can ask again before releasing a result.
+
+Post blocking replaces the complete result or error; completed side effects and
+already running external processes are not undone. Closing a form or a technical
+stub sensor failure rejects the affected operation without selecting persistent
+quarantine. Unanswered forms remain pending. Stub classifier outages remain fail-open
+under native permissions, except that existing quarantine continues to block tools.
+
+Stub mode uses no browser or separate approval server. The sensor connects to its existing
+OpenCode service. Noninteractive `opencode run` cancels forms; use the interactive
+interface for human approval. The local quarantine store is shared across sensor
+instances at `~/.local/state/opencode-sensor-v2/quarantine`, separately from
+per-instance audit files. Explicit `options.enabled: false` disables enforcement
+after restarting OpenCode but does not delete saved quarantine markers.
 
 The standalone V2 sensor can also connect directly to the Python Agent Monitor in
 `e2e_classifier` using `backend: "agent_monitor"` and a private run-credentials file.
@@ -36,3 +48,10 @@ blocks reject the current call without local override; incomplete monitor state
 stops further execution until a new run is registered and OpenCode restarts. See the V2 installation guide for service setup and supported tools.
 
 For optional pretrained fastText shadow scoring, follow the [embedding download and setup instructions](e2e_classifier/README.md#download-pretrained-fasttext-embeddings). The large pretrained binary is downloaded separately and is not included in Git.
+
+The two native choices belong only to stub mode. They do not bypass Agent Monitor
+policy or replace trusted CLI approval. Existing local session quarantine remains
+enforced after changing backend, independently of monitor permits.
+
+See the [installation guide](plugins/opencode-v2/README.md) for configuration,
+custom state paths, verification, and coverage limitations.

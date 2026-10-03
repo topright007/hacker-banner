@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { Schema } from "effect";
 import { ContextCollector } from "../src/collector.js";
-import { bindRequest } from "../src/protocol.js";
+import { assertResponse, bindRequest, jsonCopy, responseFor } from "../src/protocol.js";
 import { serializeError } from "../src/sanitize.js";
 
 const loc = { directory: "/project" };
@@ -198,7 +198,7 @@ function fixture() {
 function bind(input: any, data: any) {
   return bindRequest({
     contract: "opencode-plugin-classifier",
-    contract_version: "2.1.0",
+    contract_version: "2.3.0",
     request_id: "request",
     phase: input.phase,
     harness: { name: "opencode", version: "2.0.22", plugin_api: "v2" },
@@ -232,11 +232,62 @@ function bind(input: any, data: any) {
       classifier_deny: "ask_user",
       user_allow: "allow_once_for_bound_checkpoint",
       user_reject: "reject_tool_call_or_withhold_result",
+      user_quarantine: "persist_session_and_descendants_chat_only",
       user_no_response: "keep_checkpoint_pending",
       classifier_timeout_ms: 1000,
     },
   });
 }
+
+test("versioned contracts preserve legacy and monitor policies without accepting mixed enforcement", async () => {
+  const { collector, pre } = fixture();
+  const current = bind(pre, await collector.collect(pre));
+  assert.equal(current.contract_version, "2.3.0");
+  const legacy = jsonCopy(current);
+  legacy.contract_version = "2.1.0";
+  delete legacy.enforcement.user_quarantine;
+  const monitor = jsonCopy(current);
+  monitor.contract_version = "2.2.0";
+  monitor.enforcement = {
+    classifier_unavailable: "block_session_tree_and_request_abort",
+    classifier_deny: "block_or_require_monitor_approval",
+    user_allow: "requires_monitor_approval_and_execution_permit",
+    user_reject: "block_session_tree_and_request_abort",
+    user_no_response: "keep_blocked",
+    classifier_timeout_ms: 1000,
+    backend: "agent_monitor",
+    monitor_run_id: "run_monitor",
+  };
+  for (const input of [legacy, monitor, current]) {
+    const request = bindRequest(input);
+    const response = responseFor(request, {
+      status: "ok",
+      decision: "deny",
+      reason: "policy",
+      error: null,
+    });
+    assert.equal(response.contract_version, request.contract_version);
+    assertResponse(request, response);
+    const different = request.contract_version === "2.2.0" ? "2.3.0" : "2.2.0";
+    assert.throws(
+      () => assertResponse(request, { ...response, contract_version: different }),
+      /different checkpoint/,
+    );
+    for (const other of [legacy, monitor, current]) {
+      if (other.contract_version === input.contract_version) continue;
+      assert.throws(
+        () => bindRequest({ ...input, enforcement: other.enforcement }),
+        /Invalid classifier request/,
+      );
+    }
+  }
+  const mixed = jsonCopy(monitor);
+  mixed.enforcement.user_quarantine = "persist_session_and_descendants_chat_only";
+  assert.throws(() => bindRequest(mixed), /Invalid classifier request/);
+  const weakened = jsonCopy(monitor);
+  weakened.enforcement.classifier_unavailable = "allow_with_harness_permissions";
+  assert.throws(() => bindRequest(weakened), /Invalid classifier request/);
+});
 
 test("collects public V2 data, real catalog schemas and direct hook identity without configuration secrets", async () => {
   const { collector, pre, calls } = fixture();

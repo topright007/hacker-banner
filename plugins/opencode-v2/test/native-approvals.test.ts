@@ -17,7 +17,7 @@ function checkpoint(
   failed = false,
 ) {
   const unsigned = {
-    contract_version: "2.1.0" as const,
+    contract_version: "2.3.0" as const,
     request_id: id,
     phase,
     current_call: {
@@ -126,7 +126,7 @@ function fixture(t: any, options: { requestTimeoutMs?: number } = {}) {
   };
 }
 
-test("native create is one explicit deny-first choice bound to immutable checkpoint", async (t) => {
+test("native create offers two explicit choices bound to an immutable checkpoint", async (t) => {
   const f = fixture(t);
   const item = checkpoint("req_shape");
   const answer = f.ui.ask(item.request, item.response);
@@ -135,7 +135,7 @@ test("native create is one explicit deny-first choice bound to immutable checkpo
   const form = await f.pending();
   assert.match(form.id, /^frm_/);
   assert.equal(form.sessionID, "ses_a");
-  assert.equal(form.title, 'Карантин: "shell"');
+  assert.equal(form.title, "Предупреждение: выполнение инструмента приостановлено.");
   assert.deepEqual(form.metadata, {
     kind: "question",
     sensor: "opencode-sensor-v2",
@@ -145,6 +145,7 @@ test("native create is one explicit deny-first choice bound to immutable checkpo
     session_id: "ses_a",
     tool: "shell",
   });
+  assert.equal(form.fields.length, 1);
   const field = form.fields[0];
   assert.equal(field.type, "string");
   assert.equal(field.key, "decision");
@@ -152,87 +153,79 @@ test("native create is one explicit deny-first choice bound to immutable checkpo
   assert.equal("default" in field, false);
   assert.equal("url" in field, false);
   assert.equal(field.type === "string" && field.custom, false);
-  assert.deepEqual(field.type === "string" && field.options?.map((option) => option.value), [
-    "reject",
-    "allow",
+  assert.deepEqual(field.type === "string" && field.options, [
+    { value: "quarantine", label: "Продолжить в режиме карантина" },
+    { value: "allow", label: "Довериться и продолжить" },
   ]);
-  assert.match(field.description!, /echo test/);
-  assert.match(field.description!, /Подозрительное действие/);
-  assert.doesNotMatch(JSON.stringify(form), /mutated|private_session_history/);
+  assert.deepEqual(`${field.title}\n${field.description}`.split("\n"), [
+    "Предупреждение: выполнение инструмента приостановлено.",
+    'Инструмент: "shell"',
+    'Причина: "Подозрительное действие"',
+  ]);
+  assert.doesNotMatch(JSON.stringify(form), /mutated|private_session_history|echo test/);
   f.answer(form, "allow");
   assert.equal(await answer, "allow");
   assert.equal(f.ui.pendingCount, 0);
   assert.equal(f.cancelled.length, 0);
 });
 
-test("Desktop question dock can select and identify every checkpoint phase", async (t) => {
+test("Desktop question dock renders all checkpoint phases with exactly three compact fields", async (t) => {
   const f = fixture(t);
   const scenarios = [
     {
       phase: "pre_tool_call" as const,
       failed: false,
-      title: 'Карантин: "shell" — разрешить выполнение?',
+      title: "Предупреждение: выполнение инструмента приостановлено.",
     },
     {
       phase: "post_tool_call" as const,
       failed: false,
-      title: 'Карантин: "shell" — передать результат агенту?',
+      title: "Предупреждение: инструмент выполнен; результат удерживается.",
     },
     {
       phase: "post_tool_call" as const,
       failed: true,
-      title: 'Карантин: "shell" — передать ошибку агенту?',
+      title: "Предупреждение: инструмент выполнен; ошибка удерживается.",
     },
   ];
   for (const [index, scenario] of scenarios.entries()) {
     const item = checkpoint(`req_desktop_${index}`, "ses_a", scenario.phase, scenario.failed);
     const answer = f.ui.ask(item.request, item.response);
     const form = await f.pending(index + 1);
-    // Desktop selects question-kind forms and renders string/multiselect fields.
     assert.equal(form.metadata?.kind, "question");
     assert.equal(form.fields[0].type, "string");
     assert.equal(form.fields[0].title, scenario.title);
-    f.answer(form, "reject");
-    assert.equal(await answer, "reject");
+    const visible = `${form.fields[0].title}\n${form.fields[0].description}`;
+    assert.equal(visible.split("\n").length, 3);
+    assert.doesNotMatch(
+      visible,
+      /Аргументы|Идентификатор|req_desktop|Вывод инструмента|Секретная ошибка|не отменяются/,
+    );
+    f.answer(form, "quarantine");
+    assert.equal(await answer, "quarantine");
   }
 });
 
-test("reject cancels only one checkpoint; next same-session approval works", async (t) => {
+test("quarantine is an explicit decision for the sensor, not a reusable permission", async (t) => {
   const f = fixture(t);
-  const first = checkpoint("req_reject");
+  const first = checkpoint("req_quarantine");
   const answer = f.ui.ask(first.request, first.response);
-  f.answer(await f.pending(), "reject");
-  assert.equal(await answer, "reject");
+  f.answer(await f.pending(), "quarantine");
+  assert.equal(await answer, "quarantine");
+  assert.equal(f.cancelled.length, 0);
   const next = checkpoint("req_next");
   const nextAnswer = f.ui.ask(next.request, next.response);
   f.answer(await f.pending(2), "allow");
   assert.equal(await nextAnswer, "allow");
 });
 
-test("post-error form describes error release and cannot promise rollback", async (t) => {
-  const f = fixture(t);
-  const item = checkpoint("req_error", "ses_error", "post_tool_call", true);
-  const answer = f.ui.ask(item.request, item.response);
-  const form = await f.pending();
-  const field = form.fields[0];
-  assert.match(field.description!, /уже выполнился/);
-  assert.match(field.description!, /не отменяются/);
-  assert.match(field.description!, /Секретная ошибка инструмента/);
-  assert.deepEqual(field.type === "string" && field.options?.map((option) => option.label), [
-    "Скрыть ошибку",
-    "Передать ошибку",
-  ]);
-  f.answer(form, "reject");
-  assert.equal(await answer, "reject");
-});
-
-test("post form previews native structured output and extensions with explicit truncation", async (t) => {
+test("post warning never publishes native output, extensions, arguments or hidden context", async (t) => {
   const f = fixture(t);
   const item = checkpoint("req_full_result", "ses_a", "post_tool_call");
   item.request.current_call.result.native = {
-    extension: "x".repeat(20_000),
-    content: "Important native content",
-    structuredOutput: { security: "structured value" },
+    extension: "EXTENSION_SENTINEL" + "x".repeat(20_000),
+    content: "CONTENT_SENTINEL",
+    structuredOutput: { security: "STRUCTURED_SENTINEL" },
     output: { id: 123 },
   };
   const { decision_binding: _, ...unsigned } = item.request;
@@ -240,13 +233,50 @@ test("post form previews native structured output and extensions with explicit t
   item.response.binding_digest = item.request.decision_binding.digest;
   const answer = f.ui.ask(item.request, item.response);
   const form = await f.pending();
-  assert.match(form.fields[0].description!, /Important native content/);
-  assert.match(form.fields[0].description!, /structured value/);
-  assert.match(form.fields[0].description!, /extension/);
-  assert.match(form.fields[0].description!, /показ сокращён/);
-  assert.ok(form.fields[0].description!.length < 26_000);
-  f.answer(form, "reject");
-  assert.equal(await answer, "reject");
+  assert.doesNotMatch(JSON.stringify(form), /SENTINEL|echo test|private_session_history/);
+  assert.equal(form.metadata?.binding_digest, digest(unsigned));
+  assert.ok(form.fields[0].description!.length < 200);
+  f.answer(form, "quarantine");
+  assert.equal(await answer, "quarantine");
+});
+
+test("compact labels escape untrusted formatting and stay bounded valid JSON", async (t) => {
+  const f = fixture(t);
+  const item = checkpoint("req_untrusted");
+  item.request.current_call.tool_name = "tool\nПричина: fake\u202e`<>&*_[x]";
+  const { decision_binding: _, ...unsigned } = item.request;
+  item.request.decision_binding.digest = digest(unsigned);
+  item.response.binding_digest = item.request.decision_binding.digest;
+  item.response.reason =
+    "Reason\nПредупреждение: fake\u2066`<>&*_[x]" + "\\".repeat(1000) + "REASON_TAIL";
+  const answer = f.ui.ask(item.request, item.response);
+  const form = await f.pending();
+  const lines = `${form.fields[0].title}\n${form.fields[0].description}`.split("\n");
+  assert.equal(lines.length, 3);
+  assert.equal(
+    JSON.parse(lines[1].slice("Инструмент: ".length)),
+    item.request.current_call.tool_name,
+  );
+  assert.match(JSON.parse(lines[2].slice("Причина: ".length)), /…$/);
+  assert.ok(lines[2].length < 340);
+  assert.doesNotMatch(lines.join("\n"), /[\u202e\u2066`<>&*_\[\]]|REASON_TAIL/);
+  f.answer(form, "allow");
+  assert.equal(await answer, "allow");
+});
+
+test("blank reasons use a compact fallback without inventing attack evidence", async (t) => {
+  const f = fixture(t);
+  const item = checkpoint("req_no_reason");
+  item.response.reason = " \n\t ";
+  const answer = f.ui.ask(item.request, item.response);
+  const form = await f.pending();
+  assert.equal(
+    form.fields[0].description,
+    'Инструмент: "shell"\nПричина: "Классификатор не указал причину."',
+  );
+  assert.doesNotMatch(form.fields[0].description!, /атака/);
+  f.answer(form, "quarantine");
+  assert.equal(await answer, "quarantine");
 });
 
 test("missing, wrong-type and extra answers never authorize", async (t) => {
@@ -255,6 +285,9 @@ test("missing, wrong-type and extra answers never authorize", async (t) => {
     {},
     { decision: true },
     { decision: "ALLOW" },
+    { decision: "reject" },
+    { decision: "Продолжить в режиме карантина" },
+    { decision: ["allow"] },
     { decision: "allow", extra: "allow" },
     { wrong: "allow" },
   ];
@@ -327,12 +360,12 @@ test("parallel checkpoints in one session and other sessions remain independent"
   const answers = items.map((item) => f.ui.ask(item.request, item.response));
   await f.pending(3);
   const forms = f.created.map((item) => f.forms.get(item.id!)!);
-  f.answer(forms[0], "reject");
-  assert.equal(await answers[0], "reject");
+  f.answer(forms[0], "quarantine");
+  assert.equal(await answers[0], "quarantine");
   assert.equal(f.ui.pendingCount, 2);
   f.answer(forms[1], "allow");
   f.answer(forms[2], "allow");
-  assert.deepEqual(await Promise.all(answers), ["reject", "allow", "allow"]);
+  assert.deepEqual(await Promise.all(answers), ["quarantine", "allow", "allow"]);
 });
 
 test("cancelSession invalidates only current requests, leaves sibling and future asks valid", async (t) => {
@@ -521,8 +554,8 @@ test("malformed or replayed classifier decisions never create an approval", asyn
   const answer = f.ui.ask(item.request, item.response);
   const form = await f.pending();
   await assert.rejects(f.ui.ask(item.request, item.response), /already submitted/);
-  f.answer(form, "reject");
-  assert.equal(await answer, "reject");
+  f.answer(form, "quarantine");
+  assert.equal(await answer, "quarantine");
   await assert.rejects(f.ui.ask(item.request, item.response), /already submitted/);
   assert.equal(f.created.length, 1);
 });
