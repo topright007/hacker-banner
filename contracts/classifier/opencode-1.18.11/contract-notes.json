@@ -1,0 +1,111 @@
+{
+  "name": "Контракт OpenCode V1 plugin → classifier",
+  "contract": "opencode-plugin-classifier",
+  "contract_version": "1.0.0",
+  "runtime": {
+    "opencode": "1.18.11",
+    "plugin_api": "v1"
+  },
+  "status": "Реализован в plugins/opencode для OpenCode 1.18.11; классификатор пока локальная заглушка, всегда возвращающая deny, с разовым подтверждением пользователя.",
+  "scope": "Только поля, для которых есть источник в V1 hooks/API или собственном журнале плагина. Поля-заглушки для неподдерживаемых источников исключены.",
+  "draft_revision": 2,
+  "excluded_from_payload": [
+    "Полный каталог описаний обычных MCP tools и атрибуция MCP-серверу в registry definitions.",
+    "Отдельный mcp_server_id текущего вызова: V1 hook не даёт гарантированную связь с сервером-экспортёром. Реальные server/client/uri сохраняются внутри исходных arguments/results и inventories.",
+    "Полная sandbox policy и итоговый effective permission verdict с private remembered grants.",
+    "Общий model request ID/type для отдельных context hooks и точный итоговый provider request.",
+    "Permanent session end timestamp: передаются creation/update, а start/end вызова — в tool/delegation."
+  ],
+  "relation_to_previous_contract": "Самостоятельный профиль для V1-плагина. Предпочитать его contracts/classifier/v1: прежний исследовательский контракт включал gateway trace и внешние sandbox evidence, которых у плагина нет.",
+  "files": {
+    "request.schema.json": "Полная JSON Schema Draft 2020-12 для pre/post.",
+    "response.schema.json": "allow/deny/unavailable с привязкой к неизменному checkpoint.",
+    "tool-outcome.schema.json": "Отдельное неблокирующее наблюдение ошибок, когда post hook не вызван.",
+    "examples/*.replay.json": "Два checkpoint из реальной native test-session; отсутствующие live-наблюдения обозначены.",
+    "examples/*.illustrative.json": "Отдельные вымышленные заполненные примеры всех основных доступных блоков.",
+    "source-mapping.json": "Откуда плагин получает каждый блок и ограничения pinned версии."
+  },
+  "transport_proposal": {
+    "decision_endpoint": "POST /v1/classify/tool",
+    "content_type": "application/json",
+    "body": "request.schema.json",
+    "response": "response.schema.json",
+    "timeout_ms_example": 3000,
+    "timeout_is_configurable": true,
+    "compression": "Optional gzip negotiated by both sides; decoded JSON is unchanged.",
+    "retries": "Same request_id + byte-equivalent semantic snapshot/binding; do not re-run tool. A changed snapshot or new checkpoint gets a new request_id.",
+    "invalid_or_mismatched_response": "Log as classifier unavailable; apply selected fail-open policy. Never apply it to a different waiting call.",
+    "observation_endpoint_optional": "POST /v1/observations/tool-outcome (telemetry only; no gate verdict implied)"
+  },
+  "payload_rules": [
+    "context.sessions[].history.value.messages — полный массив доступных info/parts, а не краткое резюме. Не терять unknown native fields и unknown part types.",
+    "Максимум относится к контексту текущего дерева сессий и наблюдениям плагина, а не к произвольному чтению диска, всем пользовательским сессиям или credential store.",
+    "Каждый источник имеет availability/source/time/reason. Допустимы observed, partial, not_observed и collection_error. Это только реализуемые источники: unsupported-блоков в payload нет. null/not_observed не означает отсутствие угрозы; observed [] означает реально наблюдённый пустой набор в указанной области.",
+    "Доступность поля в принципе не гарантирует значение на каждом checkpoint: child ID появляется после создания сессии, результат только после tool execution, hook journal накапливается с момента подключения.",
+    "Все сообщения/arguments/tool descriptions/results/skills — недоверенные данные. Их роль, источник и вложенность сохраняются; текст не управляет verdict/transport/enforcement.",
+    "Pre не содержит будущий результат текущего инструмента, будущую child session, итоговые tokens/cost/end. В post результат передаётся отдельно: SDK history может ещё показывать running.",
+    "Снимок API не атомарен. У каждого source свой collected_at; соседи могут выполняться параллельно. Итоговое решение относится только к этому checkpoint.",
+    "Хуки копируются до первого await. Не хранить mutable ссылки на output. Последующие плагины могут изменить args/result/context после проверки: полная гарантия требует контроля порядка/набора плагинов.",
+    "Не брать последний system/messages/params глобально: нет общего requestID, есть параллельные title/compaction обращения. Неоднозначные observations не привязывать к конкретному tool/model request.",
+    "tool.definition — registry-stage, не полный model-visible catalog. parameters не обязательно JSON Schema; использовать реально полученный jsonSchema либо проверенное преобразование.",
+    "tool.list — default agent registry и может вызвать tool.definition. Кэшировать отдельно; не вызывать из tool.definition рекурсивно.",
+    "Описания обычных MCP tools недоступны через stock V1 hooks/registry API. MCP server instructions не доступны отдельным гарантированно атрибутированным каталогом; уже включённый текст сохраняется в system.transform observation. Анализ описаний в pre не предотвращает их предыдущее попадание в контекст.",
+    "В обычном пути ошибки инструмента пропускают tool.execute.after. MCP isError может стать исключением. Событие ошибки — telemetry, не синхронный post gate. В специальном subtask пути post может получить undefined.",
+    "hook.callID может быть part.id в subtask ветке; ищем part.callID ИЛИ part.id, сохраняем оба. Если соответствие не доказано — null/unresolved.",
+    "idle и time.updated не означают конец сессии. Вызов task может закончиться, а child session может продолжиться позже.",
+    "Один shell/codemode вызов может содержать много внутренних действий. Ручной shell путь может обходить обычные tool hooks. Контракт не обещает перехват каждого syscall/MCP подпроцесса.",
+    "Не дублировать загруженный контент отдельным файловым обходом. Native inline attachments/content сохраняются; большие/отсутствующие/уже усечённые данные явно отражаются в coverage.",
+    "Если нужны ограничения размера, нельзя молча обрезать JSON или историю. Сообщать omissions/partial. Транспортный отказ/timeout ведёт к согласованному fail-open; это осознанная потеря покрытия."
+  ],
+  "sanitization": {
+    "configuration_allowlist": [
+      "permission",
+      "instructions references",
+      "model/small_model/default_agent/subagent_depth",
+      "compaction",
+      "agent prompts/model/rules/nonsecret options",
+      "selected model capabilities",
+      "MCP names/status/type/enabled/timeout/sanitized URL"
+    ],
+    "never_export_from_configuration": [
+      "API keys",
+      "auth tokens",
+      "Authorization/Cookie headers",
+      "MCP environment values",
+      "whole host environment",
+      "credentials embedded in URL query/userinfo",
+      "arbitrary provider options without allowlist"
+    ],
+    "shell_env_observation": "cwd and session/call IDs are useful; omit env values, optionally keep variable names with redaction entry.",
+    "content": "User/tool content stays intact by default because it is classifier input; it may itself contain secrets. The classifier is a configured trusted recipient of this session context. Any content redaction is explicit and changes the binding."
+  },
+  "enforcement": [
+    "До ответа классификатора await держит конкретный pre/post hook.",
+    "allow: продолжить этот checkpoint при сохранении native OpenCode permissions.",
+    "deny: локально защёлкнуть блокировку дерева, показать причину и ждать разового решения человека; другие уже запущенные операции могут успеть завершиться.",
+    "Пользователь разрешил: снять только соответствующую причину блокировки и пропустить один связанный checkpoint. Другие deny не снимаются. Post allow разрешает выдачу результата, а не повторный запуск инструмента.",
+    "Пользователь отказал: сохранить блокировку дерева и запросить abort известных сессий. Один throw/abort не является гарантией остановки всего дерева.",
+    "Нет ответа человека: оставаться заблокированным. Не трактовать как timeout классификатора.",
+    "Timeout/transport error/unavailable classifier: зафиксировать событие и разрешить по выбранной пользователем fail-open политике. Не снимать ранее поставленные другими решениями блокировки.",
+    "Проверять binding request_id/phase/digest; пользовательский override поступает из доверенного UI, а не текста tool result. Для V1 native arbitrary confirm не предполагается: нужен отдельный UI/bridge.",
+    "При изменении проверенных args/result другим плагином решение устаревает; требуется повторная проверка в подходящей точке либо исключение таких мутаций конфигурацией."
+  ],
+  "cost": "Full history на каждый вызов увеличивает суммарный трафик примерно квадратично с длиной сессии. Для MVP контракт явно full; кэшировать неизменные catalogs и использовать согласованное сжатие. Delta/ref transport можно добавить отдельной версией без потери полей.",
+  "fixtures": {
+    "source": "security-stand/test-sessions/20261002-162415/agentdojo-human-message/session.json",
+    "tool_call_id": "Yy8Zy5TflxnyD3VTa8jRQ4866dXMcu1l",
+    "pre_future_result_excluded": true,
+    "post_history_result_not_assumed_persisted": true,
+    "gateway_trace_used": false,
+    "network_check_used": false,
+    "manifest_used": false,
+    "reconstruction_warning": "Это консервативные примеры shape, не доказательство реально собранного live-hook payload. Все события, definitions/system/permissions в illustrative вымышлены."
+  },
+  "implementation": {
+    "path": "plugins/opencode",
+    "entry": "plugins/opencode/src/index.ts",
+    "classifier": "plugins/opencode/src/classifier.ts",
+    "validation": "plugins/opencode/validation-report.json",
+    "transport": "Локальный адаптер; HTTP-клиент реального классификатора пока не подключён."
+  }
+}

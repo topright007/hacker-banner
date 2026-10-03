@@ -1,0 +1,4644 @@
+{
+  "type": "object",
+  "properties": {
+    "contract": {
+      "const": "opencode-plugin-classifier"
+    },
+    "contract_version": {
+      "const": "1.0.0"
+    },
+    "request_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "phase": {
+      "enum": [
+        "pre_tool_call",
+        "post_tool_call"
+      ]
+    },
+    "harness": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "const": "opencode"
+        },
+        "version": {
+          "const": "1.18.11"
+        },
+        "plugin_api": {
+          "const": "v1"
+        }
+      },
+      "required": [
+        "name",
+        "version",
+        "plugin_api"
+      ],
+      "additionalProperties": false
+    },
+    "snapshot": {
+      "$ref": "#/$defs/snapshot"
+    },
+    "checkpoint": {
+      "type": "object",
+      "properties": {
+        "hook": {
+          "enum": [
+            "tool.execute.before",
+            "tool.execute.after"
+          ]
+        },
+        "stage": {
+          "enum": [
+            "before_execution",
+            "before_result_release"
+          ]
+        },
+        "held_by_plugin": {
+          "type": "boolean"
+        },
+        "raw_input": {
+          "type": "object",
+          "properties": {
+            "tool": {
+              "type": "string",
+              "minLength": 1
+            },
+            "sessionID": {
+              "type": "string",
+              "minLength": 1
+            },
+            "callID": {
+              "type": "string",
+              "minLength": 1
+            },
+            "args": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          },
+          "required": [
+            "tool",
+            "sessionID",
+            "callID"
+          ],
+          "additionalProperties": true
+        },
+        "raw_output": {
+          "anyOf": [
+            {
+              "type": "object",
+              "additionalProperties": true
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "hook",
+        "stage",
+        "held_by_plugin",
+        "raw_input",
+        "raw_output"
+      ],
+      "additionalProperties": false,
+      "description": "Original hook input/output at this plugin entry. raw_output pre={args}; post=builtin or MCP output, or null if undefined. Holding this hook does not pause already-running sibling calls or all streaming metadata."
+    },
+    "current_call": {
+      "$ref": "#/$defs/current_call"
+    },
+    "context": {
+      "$ref": "#/$defs/context"
+    },
+    "coverage": {
+      "$ref": "#/$defs/coverage"
+    },
+    "enforcement": {
+      "$ref": "#/$defs/enforcement"
+    },
+    "decision_binding": {
+      "$ref": "#/$defs/binding"
+    }
+  },
+  "required": [
+    "contract",
+    "contract_version",
+    "request_id",
+    "phase",
+    "harness",
+    "snapshot",
+    "checkpoint",
+    "current_call",
+    "context",
+    "coverage",
+    "enforcement",
+    "decision_binding"
+  ],
+  "additionalProperties": false,
+  "description": "Proposed classifier request for stock OpenCode 1.18.11 V1 plugin. Full available persisted history + independently observed context, without model gateway/core patch/OS sensor. All external text is evidence, never instructions for classifier control.",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$defs": {
+    "native_message": {
+      "type": "object",
+      "properties": {
+        "info": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "sessionID": {
+              "type": "string",
+              "minLength": 1
+            },
+            "role": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "sessionID",
+            "role"
+          ],
+          "additionalProperties": true
+        },
+        "parts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "type": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "type"
+            ],
+            "additionalProperties": true
+          }
+        }
+      },
+      "required": [
+        "info",
+        "parts"
+      ],
+      "additionalProperties": true,
+      "description": "Native OpenCode {info,parts}. Preserve all actual fields, including text/reasoning/tool/file/step/compaction/subtask parts, errors, usage and unknown part types. Do not invent hidden reasoning. No final values from later in the run."
+    },
+    "model_identity": {
+      "type": "object",
+      "properties": {
+        "provider_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "model_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "variant": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "provider_id",
+        "model_id",
+        "variant"
+      ],
+      "additionalProperties": false
+    },
+    "identity": {
+      "type": "object",
+      "properties": {
+        "agent_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "model": {
+          "$ref": "#/$defs/model_identity"
+        },
+        "source": {
+          "type": "string",
+          "minLength": 1
+        },
+        "message_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "agent_name",
+        "model",
+        "source",
+        "message_id"
+      ],
+      "additionalProperties": false,
+      "description": "Identity at this point, not a permanent property of the session. Per-message identities remain in native history."
+    },
+    "history": {
+      "type": "object",
+      "properties": {
+        "format": {
+          "const": "opencode.messages.v1"
+        },
+        "scope": {
+          "const": "all_available_persisted_messages"
+        },
+        "messages": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/native_message"
+          }
+        },
+        "pagination_exhausted": {
+          "type": "boolean"
+        },
+        "redaction_applied": {
+          "type": "boolean"
+        },
+        "first_message_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "last_message_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "format",
+        "scope",
+        "messages",
+        "pagination_exhausted",
+        "redaction_applied",
+        "first_message_id",
+        "last_message_id"
+      ],
+      "additionalProperties": false,
+      "description": "No plugin-created summary/window. Fetch every page where pagination exists. This is persisted history, not the exact active model context. Deleted/missing/truncated source content cannot be reconstructed."
+    },
+    "session": {
+      "type": "object",
+      "properties": {
+        "session_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "parent_session_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "parent_relation": {
+          "enum": [
+            "root_confirmed",
+            "observed",
+            "unknown"
+          ]
+        },
+        "child_session_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "children_complete": {
+          "type": "boolean"
+        },
+        "delegation_depth": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "identity": {
+          "$ref": "#/$defs/identity"
+        },
+        "delegated_prompt": {
+          "type": "object",
+          "properties": {
+            "availability": {
+              "enum": [
+                "observed",
+                "partial",
+                "not_observed",
+                "collection_error"
+              ]
+            },
+            "source": {
+              "type": "string",
+              "minLength": 1
+            },
+            "collected_at_ms": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "Unix milliseconds; null means unknown, never zero as a sentinel."
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "reason": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "value": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "availability",
+            "source",
+            "collected_at_ms",
+            "reason",
+            "value"
+          ],
+          "additionalProperties": false,
+          "description": "From linked task arguments or a known subtask part; not inferred from an arbitrary first user message.",
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "availability": {
+                    "const": "observed"
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "value": {
+                    "type": "string"
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "availability": {
+                    "enum": [
+                      "not_observed",
+                      "collection_error"
+                    ]
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "value": {
+                    "type": "null"
+                  },
+                  "reason": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              }
+            }
+          ]
+        },
+        "native_info": {
+          "type": "object",
+          "properties": {
+            "availability": {
+              "enum": [
+                "observed",
+                "partial",
+                "not_observed",
+                "collection_error"
+              ]
+            },
+            "source": {
+              "type": "string",
+              "minLength": 1
+            },
+            "collected_at_ms": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "Unix milliseconds; null means unknown, never zero as a sentinel."
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "reason": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "value": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": true
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "availability",
+            "source",
+            "collected_at_ms",
+            "reason",
+            "value"
+          ],
+          "additionalProperties": false,
+          "description": "session.get raw JSON, with unknown fields retained. SDK static types may lag runtime.",
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "availability": {
+                    "const": "observed"
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "value": {
+                    "type": "object",
+                    "additionalProperties": true
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "availability": {
+                    "enum": [
+                      "not_observed",
+                      "collection_error"
+                    ]
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "value": {
+                    "type": "null"
+                  },
+                  "reason": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              }
+            }
+          ]
+        },
+        "history": {
+          "type": "object",
+          "properties": {
+            "availability": {
+              "enum": [
+                "observed",
+                "partial",
+                "not_observed",
+                "collection_error"
+              ]
+            },
+            "source": {
+              "type": "string",
+              "minLength": 1
+            },
+            "collected_at_ms": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "Unix milliseconds; null means unknown, never zero as a sentinel."
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "reason": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "value": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/history"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "availability",
+            "source",
+            "collected_at_ms",
+            "reason",
+            "value"
+          ],
+          "additionalProperties": false,
+          "description": "All persisted native messages available for this session at collection time.",
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "availability": {
+                    "const": "observed"
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "value": {
+                    "$ref": "#/$defs/history"
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "availability": {
+                    "enum": [
+                      "not_observed",
+                      "collection_error"
+                    ]
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "value": {
+                    "type": "null"
+                  },
+                  "reason": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              }
+            }
+          ]
+        },
+        "status": {
+          "type": "object",
+          "properties": {
+            "availability": {
+              "enum": [
+                "observed",
+                "partial",
+                "not_observed",
+                "collection_error"
+              ]
+            },
+            "source": {
+              "type": "string",
+              "minLength": 1
+            },
+            "collected_at_ms": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "Unix milliseconds; null means unknown, never zero as a sentinel."
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "reason": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "value": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": true
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "availability",
+            "source",
+            "collected_at_ms",
+            "reason",
+            "value"
+          ],
+          "additionalProperties": false,
+          "description": "session.status entry for this session: idle/busy/retry and supplied details.",
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "availability": {
+                    "const": "observed"
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "value": {
+                    "type": "object",
+                    "additionalProperties": true
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "availability": {
+                    "enum": [
+                      "not_observed",
+                      "collection_error"
+                    ]
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "value": {
+                    "type": "null"
+                  },
+                  "reason": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              }
+            }
+          ]
+        },
+        "timestamps": {
+          "type": "object",
+          "properties": {
+            "created_at_ms": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "Unix milliseconds; null means unknown, never zero as a sentinel."
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "updated_at_ms": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "Unix milliseconds; null means unknown, never zero as a sentinel."
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "created_at_ms",
+            "updated_at_ms"
+          ],
+          "additionalProperties": false,
+          "description": "Observed session creation/update times. Session updated/idle is not permanent session end. Task start/end remain on the delegation/tool, not child session lifetime."
+        },
+        "permission_overrides": {
+          "type": "object",
+          "properties": {
+            "availability": {
+              "enum": [
+                "observed",
+                "partial",
+                "not_observed",
+                "collection_error"
+              ]
+            },
+            "source": {
+              "type": "string",
+              "minLength": 1
+            },
+            "collected_at_ms": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "Unix milliseconds; null means unknown, never zero as a sentinel."
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "reason": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "value": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": true
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "availability",
+            "source",
+            "collected_at_ms",
+            "reason",
+            "value"
+          ],
+          "additionalProperties": false,
+          "description": "Rules from session.info.permission. Not the full effective permission decision.",
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "availability": {
+                    "const": "observed"
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "value": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "availability": {
+                    "enum": [
+                      "not_observed",
+                      "collection_error"
+                    ]
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "value": {
+                    "type": "null"
+                  },
+                  "reason": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              }
+            }
+          ]
+        },
+        "todo": {
+          "type": "object",
+          "properties": {
+            "availability": {
+              "enum": [
+                "observed",
+                "partial",
+                "not_observed",
+                "collection_error"
+              ]
+            },
+            "source": {
+              "type": "string",
+              "minLength": 1
+            },
+            "collected_at_ms": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "Unix milliseconds; null means unknown, never zero as a sentinel."
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "reason": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "value": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": true
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "availability",
+            "source",
+            "collected_at_ms",
+            "reason",
+            "value"
+          ],
+          "additionalProperties": false,
+          "description": "session.todo snapshot.",
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "availability": {
+                    "const": "observed"
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "value": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "availability": {
+                    "enum": [
+                      "not_observed",
+                      "collection_error"
+                    ]
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "value": {
+                    "type": "null"
+                  },
+                  "reason": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              }
+            }
+          ]
+        },
+        "diff": {
+          "type": "object",
+          "properties": {
+            "availability": {
+              "enum": [
+                "observed",
+                "partial",
+                "not_observed",
+                "collection_error"
+              ]
+            },
+            "source": {
+              "type": "string",
+              "minLength": 1
+            },
+            "collected_at_ms": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "Unix milliseconds; null means unknown, never zero as a sentinel."
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "reason": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "value": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": true
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "availability",
+            "source",
+            "collected_at_ms",
+            "reason",
+            "value"
+          ],
+          "additionalProperties": false,
+          "description": "session.diff snapshot; before/after/additions/deletions if present. Not every shell/filesystem access.",
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "availability": {
+                    "const": "observed"
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "value": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "availability": {
+                    "enum": [
+                      "not_observed",
+                      "collection_error"
+                    ]
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "value": {
+                    "type": "null"
+                  },
+                  "reason": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              }
+            }
+          ]
+        },
+        "returned_result": {
+          "type": "object",
+          "properties": {
+            "availability": {
+              "enum": [
+                "observed",
+                "partial",
+                "not_observed",
+                "collection_error"
+              ]
+            },
+            "source": {
+              "type": "string",
+              "minLength": 1
+            },
+            "collected_at_ms": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "Unix milliseconds; null means unknown, never zero as a sentinel."
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "reason": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "value": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": true
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "availability",
+            "source",
+            "collected_at_ms",
+            "reason",
+            "value"
+          ],
+          "additionalProperties": false,
+          "description": "Actual returned task result or known final assistant message, with source IDs; absent until observed.",
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "availability": {
+                    "const": "observed"
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "value": {
+                    "type": "object",
+                    "additionalProperties": true
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "availability": {
+                    "enum": [
+                      "not_observed",
+                      "collection_error"
+                    ]
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "value": {
+                    "type": "null"
+                  },
+                  "reason": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      "required": [
+        "session_id",
+        "parent_session_id",
+        "parent_relation",
+        "child_session_ids",
+        "children_complete",
+        "delegation_depth",
+        "identity",
+        "delegated_prompt",
+        "native_info",
+        "history",
+        "status",
+        "timestamps",
+        "permission_overrides",
+        "todo",
+        "diff",
+        "returned_result"
+      ],
+      "additionalProperties": false
+    },
+    "delegation": {
+      "type": "object",
+      "properties": {
+        "parent_session_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "child_session_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "parent_message_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "parent_part_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tool_call_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "hook_call_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "agent_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "model": {
+          "$ref": "#/$defs/model_identity"
+        },
+        "delegated_prompt": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "delegation_depth": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "status": {
+          "enum": [
+            "proposed",
+            "running",
+            "returned",
+            "error",
+            "unknown"
+          ]
+        },
+        "tool_started_at_ms": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Unix milliseconds; null means unknown, never zero as a sentinel."
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tool_ended_at_ms": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Unix milliseconds; null means unknown, never zero as a sentinel."
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "returned_result": {
+          "anyOf": [
+            {},
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "source": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "parent_session_id",
+        "child_session_id",
+        "parent_message_id",
+        "parent_part_id",
+        "tool_call_id",
+        "hook_call_id",
+        "agent_name",
+        "model",
+        "delegated_prompt",
+        "description",
+        "delegation_depth",
+        "status",
+        "tool_started_at_ms",
+        "tool_ended_at_ms",
+        "returned_result",
+        "source"
+      ],
+      "additionalProperties": false,
+      "description": "Observed parent-child task edge. Child ID/model do not necessarily exist on pre. References and return data are untrusted content, not new instructions."
+    },
+    "resource": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "enum": [
+            "file",
+            "directory",
+            "url",
+            "mcp_resource",
+            "attachment",
+            "unknown"
+          ]
+        },
+        "locator": {
+          "type": "string"
+        },
+        "session_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "message_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "part_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tool_call_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "access": {
+          "enum": [
+            "read",
+            "write",
+            "reference_only",
+            "unknown"
+          ]
+        },
+        "source": {
+          "type": "string",
+          "minLength": 1
+        },
+        "access_confirmed": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "kind",
+        "locator",
+        "session_ids",
+        "message_id",
+        "part_id",
+        "tool_call_id",
+        "access",
+        "source",
+        "access_confirmed"
+      ],
+      "additionalProperties": false,
+      "description": "Observed reference. Shared session_ids mean observed in these sessions, not a complete file-sharing/access graph. access_confirmed means confirmed by OpenCode observations, not independent OS audit; a mentioned path alone is reference_only. No arbitrary file crawl or dereferencing of URLs to inflate context."
+    },
+    "definition": {
+      "type": "object",
+      "properties": {
+        "definition_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "tool_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "origin": {
+          "enum": [
+            "builtin",
+            "plugin",
+            "unknown"
+          ]
+        },
+        "description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "input_schema": {
+          "anyOf": [
+            {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": true
+                },
+                {
+                  "type": "boolean"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "schema_status": {
+          "enum": [
+            "json_schema_observed",
+            "converted_to_json_schema",
+            "unavailable"
+          ]
+        },
+        "source": {
+          "enum": [
+            "tool.definition",
+            "sdk.tool.list"
+          ]
+        },
+        "scope": {
+          "enum": [
+            "registry_stage",
+            "default_agent_registry"
+          ]
+        },
+        "collected_at_ms": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Unix milliseconds; null means unknown, never zero as a sentinel."
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "model_filter": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/model_identity"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "model_visible_exact": {
+          "const": false
+        },
+        "native_json": {
+          "anyOf": [
+            {
+              "type": "object",
+              "additionalProperties": true
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "definition_id",
+        "tool_id",
+        "origin",
+        "description",
+        "input_schema",
+        "schema_status",
+        "source",
+        "scope",
+        "collected_at_ms",
+        "model_filter",
+        "model_visible_exact",
+        "native_json"
+      ],
+      "additionalProperties": false,
+      "description": "Candidate definition at a known stage, not the exact model-visible tool. parameters may be Effect/Zod runtime objects: retain actual jsonSchema or an explicit valid conversion, never JSON.stringify(parameters) as a schema. Ordinary MCP definitions are unavailable in stock V1 public hooks/API."
+    },
+    "context_observation": {
+      "type": "object",
+      "properties": {
+        "observation_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sequence": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "observed_at_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Unix milliseconds; null means unknown, never zero as a sentinel."
+        },
+        "hook": {
+          "enum": [
+            "chat.message",
+            "experimental.chat.messages.transform",
+            "experimental.chat.system.transform",
+            "chat.params",
+            "chat.headers",
+            "experimental.session.compacting",
+            "experimental.compaction.autocontinue",
+            "command.execute.before",
+            "experimental.text.complete",
+            "shell.env"
+          ]
+        },
+        "session_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "message_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "hook_call_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "agent_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "model": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/model_identity"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "correlation": {
+          "type": "object",
+          "properties": {
+            "session": {
+              "enum": [
+                "direct",
+                "derived_from_message_session_ids",
+                "unknown"
+              ]
+            },
+            "current_call": {
+              "enum": [
+                "direct_hook_call_id",
+                "same_session_only",
+                "unknown"
+              ]
+            }
+          },
+          "required": [
+            "session",
+            "current_call"
+          ],
+          "additionalProperties": false
+        },
+        "input": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "output": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "redaction_applied": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "observation_id",
+        "sequence",
+        "observed_at_ms",
+        "hook",
+        "session_id",
+        "message_id",
+        "hook_call_id",
+        "agent_name",
+        "model",
+        "correlation",
+        "input",
+        "output",
+        "redaction_applied"
+      ],
+      "additionalProperties": false,
+      "description": "Independent deep-copied hook observation at plugin entry, before await. Preserve messages/system/content and JSON-compatible settings; sanitize configuration credentials. No merge of latest system/messages/params into an alleged exact model request. Later plugins/provider transforms can change values."
+    },
+    "approval": {
+      "type": "object",
+      "properties": {
+        "decision_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "source": {
+          "enum": [
+            "plugin.classifier",
+            "plugin.user_override",
+            "harness.permission_event"
+          ]
+        },
+        "session_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "tool_call_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "hook_call_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "classifier_request_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "permission_request_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "phase": {
+          "anyOf": [
+            {
+              "enum": [
+                "pre_tool_call",
+                "post_tool_call"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "decision": {
+          "enum": [
+            "allow",
+            "deny",
+            "unavailable",
+            "once",
+            "always",
+            "reject"
+          ]
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "scope": {
+          "enum": [
+            "call",
+            "permission_patterns",
+            "session_tree",
+            "unknown"
+          ]
+        },
+        "binding_digest": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "decided_at_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Unix milliseconds; null means unknown, never zero as a sentinel."
+        },
+        "native": {
+          "anyOf": [
+            {
+              "type": "object",
+              "additionalProperties": true
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "decision_id",
+        "source",
+        "session_id",
+        "tool_call_id",
+        "hook_call_id",
+        "classifier_request_id",
+        "permission_request_id",
+        "phase",
+        "decision",
+        "reason",
+        "scope",
+        "binding_digest",
+        "decided_at_ms",
+        "native"
+      ],
+      "additionalProperties": false,
+      "description": "Only observed decisions. Preserve native permission reply. Automatic harness allow/deny decisions are not all observable. A classifier deny and user override are separate records."
+    },
+    "event": {
+      "type": "object",
+      "properties": {
+        "event_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sequence": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "observed_at_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Unix milliseconds; null means unknown, never zero as a sentinel."
+        },
+        "session_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "native": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      },
+      "required": [
+        "event_id",
+        "sequence",
+        "observed_at_ms",
+        "session_id",
+        "native"
+      ],
+      "additionalProperties": false,
+      "description": "Public event payload, preserving type/properties/unknown fields after declared sanitation. Scope to selected session tree/workspace; callbacks can complete out of order. Sequence is plugin ingress order, not global causality."
+    },
+    "configuration": {
+      "type": "object",
+      "properties": {
+        "config_projection": {
+          "type": "object",
+          "properties": {
+            "availability": {
+              "enum": [
+                "observed",
+                "partial",
+                "not_observed",
+                "collection_error"
+              ]
+            },
+            "source": {
+              "type": "string",
+              "minLength": 1
+            },
+            "collected_at_ms": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "Unix milliseconds; null means unknown, never zero as a sentinel."
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "reason": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "value": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": true
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "availability",
+            "source",
+            "collected_at_ms",
+            "reason",
+            "value"
+          ],
+          "additionalProperties": false,
+          "description": "Allowlisted effective config projection: permission, instructions references, model/small_model/default_agent/subagent_depth, compaction and relevant agent settings. Never raw config dump.",
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "availability": {
+                    "const": "observed"
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "value": {
+                    "type": "object",
+                    "additionalProperties": true
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "availability": {
+                    "enum": [
+                      "not_observed",
+                      "collection_error"
+                    ]
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "value": {
+                    "type": "null"
+                  },
+                  "reason": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              }
+            }
+          ]
+        },
+        "agents": {
+          "type": "object",
+          "properties": {
+            "availability": {
+              "enum": [
+                "observed",
+                "partial",
+                "not_observed",
+                "collection_error"
+              ]
+            },
+            "source": {
+              "type": "string",
+              "minLength": 1
+            },
+            "collected_at_ms": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "Unix milliseconds; null means unknown, never zero as a sentinel."
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "reason": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "value": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": true
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "availability",
+            "source",
+            "collected_at_ms",
+            "reason",
+            "value"
+          ],
+          "additionalProperties": false,
+          "description": "app.agents JSON settings: prompts, model, permission rules and nonsecret options; preserve sanitized extra fields. Inventory, not proof of execution.",
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "availability": {
+                    "const": "observed"
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "value": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "availability": {
+                    "enum": [
+                      "not_observed",
+                      "collection_error"
+                    ]
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "value": {
+                    "type": "null"
+                  },
+                  "reason": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              }
+            }
+          ]
+        },
+        "selected_model": {
+          "type": "object",
+          "properties": {
+            "availability": {
+              "enum": [
+                "observed",
+                "partial",
+                "not_observed",
+                "collection_error"
+              ]
+            },
+            "source": {
+              "type": "string",
+              "minLength": 1
+            },
+            "collected_at_ms": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "Unix milliseconds; null means unknown, never zero as a sentinel."
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "reason": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "value": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": true
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "availability",
+            "source",
+            "collected_at_ms",
+            "reason",
+            "value"
+          ],
+          "additionalProperties": false,
+          "description": "Selected provider/model identity and capabilities/context limits. Exclude credentials, headers and unrelated provider catalog.",
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "availability": {
+                    "const": "observed"
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "value": {
+                    "type": "object",
+                    "additionalProperties": true
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "availability": {
+                    "enum": [
+                      "not_observed",
+                      "collection_error"
+                    ]
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "value": {
+                    "type": "null"
+                  },
+                  "reason": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              }
+            }
+          ]
+        },
+        "mcp_servers": {
+          "type": "object",
+          "properties": {
+            "availability": {
+              "enum": [
+                "observed",
+                "partial",
+                "not_observed",
+                "collection_error"
+              ]
+            },
+            "source": {
+              "type": "string",
+              "minLength": 1
+            },
+            "collected_at_ms": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "Unix milliseconds; null means unknown, never zero as a sentinel."
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "reason": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "value": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": true
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "availability",
+            "source",
+            "collected_at_ms",
+            "reason",
+            "value"
+          ],
+          "additionalProperties": false,
+          "description": "mcp.status plus safe server metadata (name,type,enabled,timeout,endpoint after credential removal). Connection status is not tool definitions/instructions.",
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "availability": {
+                    "const": "observed"
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "value": {
+                    "type": "object",
+                    "additionalProperties": true
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "availability": {
+                    "enum": [
+                      "not_observed",
+                      "collection_error"
+                    ]
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "value": {
+                    "type": "null"
+                  },
+                  "reason": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      "required": [
+        "config_projection",
+        "agents",
+        "selected_model",
+        "mcp_servers"
+      ],
+      "additionalProperties": false
+    },
+    "journal": {
+      "type": "object",
+      "properties": {
+        "observed_since_ms": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Unix milliseconds; null means unknown, never zero as a sentinel."
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "durable_across_restart": {
+          "type": "boolean"
+        },
+        "events": {
+          "type": "object",
+          "properties": {
+            "availability": {
+              "enum": [
+                "observed",
+                "partial",
+                "not_observed",
+                "collection_error"
+              ]
+            },
+            "source": {
+              "type": "string",
+              "minLength": 1
+            },
+            "collected_at_ms": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "Unix milliseconds; null means unknown, never zero as a sentinel."
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "reason": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "value": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/event"
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "availability",
+            "source",
+            "collected_at_ms",
+            "reason",
+            "value"
+          ],
+          "additionalProperties": false,
+          "description": "Public relevant events since collector began, not a replay of every past event.",
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "availability": {
+                    "const": "observed"
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "value": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/$defs/event"
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "availability": {
+                    "enum": [
+                      "not_observed",
+                      "collection_error"
+                    ]
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "value": {
+                    "type": "null"
+                  },
+                  "reason": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              }
+            }
+          ]
+        },
+        "approval_decisions": {
+          "type": "object",
+          "properties": {
+            "availability": {
+              "enum": [
+                "observed",
+                "partial",
+                "not_observed",
+                "collection_error"
+              ]
+            },
+            "source": {
+              "type": "string",
+              "minLength": 1
+            },
+            "collected_at_ms": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "Unix milliseconds; null means unknown, never zero as a sentinel."
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "reason": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "value": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/approval"
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "availability",
+            "source",
+            "collected_at_ms",
+            "reason",
+            "value"
+          ],
+          "additionalProperties": false,
+          "description": "Plugin decisions plus observed permission.replied events.",
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "availability": {
+                    "const": "observed"
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "value": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/$defs/approval"
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "availability": {
+                    "enum": [
+                      "not_observed",
+                      "collection_error"
+                    ]
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "value": {
+                    "type": "null"
+                  },
+                  "reason": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              }
+            }
+          ]
+        },
+        "pending_permissions": {
+          "type": "object",
+          "properties": {
+            "availability": {
+              "enum": [
+                "observed",
+                "partial",
+                "not_observed",
+                "collection_error"
+              ]
+            },
+            "source": {
+              "type": "string",
+              "minLength": 1
+            },
+            "collected_at_ms": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "Unix milliseconds; null means unknown, never zero as a sentinel."
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "reason": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "value": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": true
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "availability",
+            "source",
+            "collected_at_ms",
+            "reason",
+            "value"
+          ],
+          "additionalProperties": false,
+          "description": "Pending permission requests from available API/events, not all past decisions.",
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "availability": {
+                    "const": "observed"
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "value": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "availability": {
+                    "enum": [
+                      "not_observed",
+                      "collection_error"
+                    ]
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "value": {
+                    "type": "null"
+                  },
+                  "reason": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              }
+            }
+          ]
+        },
+        "in_flight_calls": {
+          "type": "object",
+          "properties": {
+            "availability": {
+              "enum": [
+                "observed",
+                "partial",
+                "not_observed",
+                "collection_error"
+              ]
+            },
+            "source": {
+              "type": "string",
+              "minLength": 1
+            },
+            "collected_at_ms": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "Unix milliseconds; null means unknown, never zero as a sentinel."
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "reason": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "value": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": true
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "availability",
+            "source",
+            "collected_at_ms",
+            "reason",
+            "value"
+          ],
+          "additionalProperties": false,
+          "description": "Other calls observed as running. Capture call/session IDs and native states; concurrent tools may already be executing.",
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "availability": {
+                    "const": "observed"
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "value": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "availability": {
+                    "enum": [
+                      "not_observed",
+                      "collection_error"
+                    ]
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "value": {
+                    "type": "null"
+                  },
+                  "reason": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              }
+            }
+          ]
+        },
+        "session_gate": {
+          "type": "object",
+          "properties": {
+            "state": {
+              "enum": [
+                "open",
+                "awaiting_classifier",
+                "awaiting_user",
+                "blocked",
+                "unknown"
+              ]
+            },
+            "scope_session_ids": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "reason": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "state",
+            "scope_session_ids",
+            "reason"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "observed_since_ms",
+        "durable_across_restart",
+        "events",
+        "approval_decisions",
+        "pending_permissions",
+        "in_flight_calls",
+        "session_gate"
+      ],
+      "additionalProperties": false
+    },
+    "context": {
+      "type": "object",
+      "properties": {
+        "session_scope": {
+          "type": "object",
+          "properties": {
+            "root_session_id": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "root_resolved": {
+              "type": "boolean"
+            },
+            "mode": {
+              "const": "current_session_and_resolved_tree"
+            },
+            "requested_session_ids": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "discovered_session_ids": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "unavailable_session_ids": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "tree_complete": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "root_session_id",
+            "root_resolved",
+            "mode",
+            "requested_session_ids",
+            "discovered_session_ids",
+            "unavailable_session_ids",
+            "tree_complete"
+          ],
+          "additionalProperties": false
+        },
+        "sessions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/session"
+          }
+        },
+        "delegations": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/delegation"
+          }
+        },
+        "observed_prompt_context": {
+          "type": "object",
+          "properties": {
+            "availability": {
+              "enum": [
+                "observed",
+                "partial",
+                "not_observed",
+                "collection_error"
+              ]
+            },
+            "source": {
+              "type": "string",
+              "minLength": 1
+            },
+            "collected_at_ms": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "Unix milliseconds; null means unknown, never zero as a sentinel."
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "reason": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "value": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/context_observation"
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "availability",
+            "source",
+            "collected_at_ms",
+            "reason",
+            "value"
+          ],
+          "additionalProperties": false,
+          "description": "Independent hook snapshots. Include only directly scoped or unambiguously derived sessions in selected tree; do not attach another session's latest global hook.",
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "availability": {
+                    "const": "observed"
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "value": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/$defs/context_observation"
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "availability": {
+                    "enum": [
+                      "not_observed",
+                      "collection_error"
+                    ]
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "value": {
+                    "type": "null"
+                  },
+                  "reason": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              }
+            }
+          ]
+        },
+        "tool_catalog": {
+          "type": "object",
+          "properties": {
+            "definitions": {
+              "type": "object",
+              "properties": {
+                "availability": {
+                  "enum": [
+                    "observed",
+                    "partial",
+                    "not_observed",
+                    "collection_error"
+                  ]
+                },
+                "source": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "collected_at_ms": {
+                  "anyOf": [
+                    {
+                      "type": "integer",
+                      "minimum": 0,
+                      "description": "Unix milliseconds; null means unknown, never zero as a sentinel."
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "reason": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "value": {
+                  "anyOf": [
+                    {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/$defs/definition"
+                      }
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "availability",
+                "source",
+                "collected_at_ms",
+                "reason",
+                "value"
+              ],
+              "additionalProperties": false,
+              "description": "Cached definitions and optional default-agent SDK catalog snapshots. Cache with source/model/time, and avoid tool.list inside tool.definition (recursive hooks).",
+              "allOf": [
+                {
+                  "if": {
+                    "properties": {
+                      "availability": {
+                        "const": "observed"
+                      }
+                    }
+                  },
+                  "then": {
+                    "properties": {
+                      "value": {
+                        "type": "array",
+                        "items": {
+                          "$ref": "#/$defs/definition"
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "availability": {
+                        "enum": [
+                          "not_observed",
+                          "collection_error"
+                        ]
+                      }
+                    }
+                  },
+                  "then": {
+                    "properties": {
+                      "value": {
+                        "type": "null"
+                      },
+                      "reason": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          "required": [
+            "definitions"
+          ],
+          "additionalProperties": false
+        },
+        "skills_inventory": {
+          "type": "object",
+          "properties": {
+            "availability": {
+              "enum": [
+                "observed",
+                "partial",
+                "not_observed",
+                "collection_error"
+              ]
+            },
+            "source": {
+              "type": "string",
+              "minLength": 1
+            },
+            "collected_at_ms": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "Unix milliseconds; null means unknown, never zero as a sentinel."
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "reason": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "value": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": true
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "availability",
+            "source",
+            "collected_at_ms",
+            "reason",
+            "value"
+          ],
+          "additionalProperties": false,
+          "description": "Optional GET /skill: name, description, location, content. Inventory, not necessarily model-visible.",
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "availability": {
+                    "const": "observed"
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "value": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "availability": {
+                    "enum": [
+                      "not_observed",
+                      "collection_error"
+                    ]
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "value": {
+                    "type": "null"
+                  },
+                  "reason": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              }
+            }
+          ]
+        },
+        "mcp_resource_inventory": {
+          "type": "object",
+          "properties": {
+            "availability": {
+              "enum": [
+                "observed",
+                "partial",
+                "not_observed",
+                "collection_error"
+              ]
+            },
+            "source": {
+              "type": "string",
+              "minLength": 1
+            },
+            "collected_at_ms": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "Unix milliseconds; null means unknown, never zero as a sentinel."
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "reason": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "value": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": true
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "availability",
+            "source",
+            "collected_at_ms",
+            "reason",
+            "value"
+          ],
+          "additionalProperties": false,
+          "description": "Optional GET /experimental/resource: resource descriptors only, not full content/templates.",
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "availability": {
+                    "const": "observed"
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "value": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "availability": {
+                    "enum": [
+                      "not_observed",
+                      "collection_error"
+                    ]
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "value": {
+                    "type": "null"
+                  },
+                  "reason": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              }
+            }
+          ]
+        },
+        "runtime_configuration": {
+          "$ref": "#/$defs/configuration"
+        },
+        "workspace": {
+          "type": "object",
+          "properties": {
+            "directory": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "worktree": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "project": {
+              "type": "object",
+              "properties": {
+                "availability": {
+                  "enum": [
+                    "observed",
+                    "partial",
+                    "not_observed",
+                    "collection_error"
+                  ]
+                },
+                "source": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "collected_at_ms": {
+                  "anyOf": [
+                    {
+                      "type": "integer",
+                      "minimum": 0,
+                      "description": "Unix milliseconds; null means unknown, never zero as a sentinel."
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "reason": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "value": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "additionalProperties": true
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "availability",
+                "source",
+                "collected_at_ms",
+                "reason",
+                "value"
+              ],
+              "additionalProperties": false,
+              "description": "Plugin input/project.current, safe JSON snapshot.",
+              "allOf": [
+                {
+                  "if": {
+                    "properties": {
+                      "availability": {
+                        "const": "observed"
+                      }
+                    }
+                  },
+                  "then": {
+                    "properties": {
+                      "value": {
+                        "type": "object",
+                        "additionalProperties": true
+                      }
+                    }
+                  }
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "availability": {
+                        "enum": [
+                          "not_observed",
+                          "collection_error"
+                        ]
+                      }
+                    }
+                  },
+                  "then": {
+                    "properties": {
+                      "value": {
+                        "type": "null"
+                      },
+                      "reason": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    }
+                  }
+                }
+              ]
+            },
+            "paths": {
+              "type": "object",
+              "properties": {
+                "availability": {
+                  "enum": [
+                    "observed",
+                    "partial",
+                    "not_observed",
+                    "collection_error"
+                  ]
+                },
+                "source": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "collected_at_ms": {
+                  "anyOf": [
+                    {
+                      "type": "integer",
+                      "minimum": 0,
+                      "description": "Unix milliseconds; null means unknown, never zero as a sentinel."
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "reason": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "value": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "additionalProperties": true
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "availability",
+                "source",
+                "collected_at_ms",
+                "reason",
+                "value"
+              ],
+              "additionalProperties": false,
+              "description": "path.get safe path fields.",
+              "allOf": [
+                {
+                  "if": {
+                    "properties": {
+                      "availability": {
+                        "const": "observed"
+                      }
+                    }
+                  },
+                  "then": {
+                    "properties": {
+                      "value": {
+                        "type": "object",
+                        "additionalProperties": true
+                      }
+                    }
+                  }
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "availability": {
+                        "enum": [
+                          "not_observed",
+                          "collection_error"
+                        ]
+                      }
+                    }
+                  },
+                  "then": {
+                    "properties": {
+                      "value": {
+                        "type": "null"
+                      },
+                      "reason": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    }
+                  }
+                }
+              ]
+            },
+            "vcs": {
+              "type": "object",
+              "properties": {
+                "availability": {
+                  "enum": [
+                    "observed",
+                    "partial",
+                    "not_observed",
+                    "collection_error"
+                  ]
+                },
+                "source": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "collected_at_ms": {
+                  "anyOf": [
+                    {
+                      "type": "integer",
+                      "minimum": 0,
+                      "description": "Unix milliseconds; null means unknown, never zero as a sentinel."
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "reason": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "value": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "additionalProperties": true
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "availability",
+                "source",
+                "collected_at_ms",
+                "reason",
+                "value"
+              ],
+              "additionalProperties": false,
+              "description": "vcs.get snapshot, e.g. branch.",
+              "allOf": [
+                {
+                  "if": {
+                    "properties": {
+                      "availability": {
+                        "const": "observed"
+                      }
+                    }
+                  },
+                  "then": {
+                    "properties": {
+                      "value": {
+                        "type": "object",
+                        "additionalProperties": true
+                      }
+                    }
+                  }
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "availability": {
+                        "enum": [
+                          "not_observed",
+                          "collection_error"
+                        ]
+                      }
+                    }
+                  },
+                  "then": {
+                    "properties": {
+                      "value": {
+                        "type": "null"
+                      },
+                      "reason": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          "required": [
+            "directory",
+            "worktree",
+            "project",
+            "paths",
+            "vcs"
+          ],
+          "additionalProperties": false
+        },
+        "shared_resources": {
+          "type": "object",
+          "properties": {
+            "availability": {
+              "enum": [
+                "observed",
+                "partial",
+                "not_observed",
+                "collection_error"
+              ]
+            },
+            "source": {
+              "type": "string",
+              "minLength": 1
+            },
+            "collected_at_ms": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "Unix milliseconds; null means unknown, never zero as a sentinel."
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "reason": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "value": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/resource"
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "availability",
+            "source",
+            "collected_at_ms",
+            "reason",
+            "value"
+          ],
+          "additionalProperties": false,
+          "description": "Partial observed references from history/arguments/results/events, not OS audit.",
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "availability": {
+                    "const": "observed"
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "value": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/$defs/resource"
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "availability": {
+                    "enum": [
+                      "not_observed",
+                      "collection_error"
+                    ]
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "value": {
+                    "type": "null"
+                  },
+                  "reason": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              }
+            }
+          ]
+        },
+        "journal": {
+          "$ref": "#/$defs/journal"
+        }
+      },
+      "required": [
+        "session_scope",
+        "sessions",
+        "delegations",
+        "observed_prompt_context",
+        "tool_catalog",
+        "skills_inventory",
+        "mcp_resource_inventory",
+        "runtime_configuration",
+        "workspace",
+        "shared_resources",
+        "journal"
+      ],
+      "additionalProperties": false
+    },
+    "result": {
+      "type": "object",
+      "properties": {
+        "format": {
+          "enum": [
+            "builtin_output",
+            "mcp_call_tool_result",
+            "missing"
+          ]
+        },
+        "native": {
+          "anyOf": [
+            {
+              "type": "object",
+              "additionalProperties": true
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "normalized": {
+          "type": "object",
+          "properties": {
+            "title": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "output": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "metadata": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": true
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "attachments": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {}
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "content": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {}
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "structured_content": {
+              "anyOf": [
+                {},
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "is_error": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "title",
+            "output",
+            "metadata",
+            "attachments",
+            "content",
+            "structured_content",
+            "is_error"
+          ],
+          "additionalProperties": false
+        },
+        "missing_reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "format",
+        "native",
+        "normalized",
+        "missing_reason"
+      ],
+      "additionalProperties": false,
+      "description": "Exact JSON-compatible hook output before this plugin modifies it; do not flatten MCP content or drop _meta/unknown fields. normalized is only a view. Builtin output may already be truncated by harness; MCP post runs before normal conversion/truncation. missing includes special subtask post(undefined).",
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "format": {
+                "const": "missing"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "native": {
+                "type": "null"
+              },
+              "missing_reason": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "format": {
+                "enum": [
+                  "builtin_output",
+                  "mcp_call_tool_result"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "native": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "missing_reason": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "current_call": {
+      "type": "object",
+      "properties": {
+        "session_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "hook_call_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "tool_call_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "message_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "part_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "correlation": {
+          "enum": [
+            "part.callID",
+            "part.id",
+            "unresolved"
+          ]
+        },
+        "tool_name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "tool_origin": {
+          "enum": [
+            "builtin",
+            "plugin",
+            "mcp",
+            "unknown"
+          ]
+        },
+        "identity": {
+          "$ref": "#/$defs/identity"
+        },
+        "arguments": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "definition_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "definition_match": {
+          "enum": [
+            "registry_candidate",
+            "unknown"
+          ]
+        },
+        "status": {
+          "enum": [
+            "proposed",
+            "returned",
+            "result_missing"
+          ]
+        },
+        "timestamps": {
+          "type": "object",
+          "properties": {
+            "pre_observed_at_ms": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "Unix milliseconds; null means unknown, never zero as a sentinel."
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "post_observed_at_ms": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "Unix milliseconds; null means unknown, never zero as a sentinel."
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "native_start_at_ms": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "Unix milliseconds; null means unknown, never zero as a sentinel."
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "native_end_at_ms": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "Unix milliseconds; null means unknown, never zero as a sentinel."
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "pre_observed_at_ms",
+            "post_observed_at_ms",
+            "native_start_at_ms",
+            "native_end_at_ms"
+          ],
+          "additionalProperties": false
+        },
+        "result": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/result"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "session_id",
+        "hook_call_id",
+        "tool_call_id",
+        "message_id",
+        "part_id",
+        "correlation",
+        "tool_name",
+        "tool_origin",
+        "identity",
+        "arguments",
+        "definition_ids",
+        "definition_match",
+        "status",
+        "timestamps",
+        "result"
+      ],
+      "additionalProperties": false,
+      "description": "hook_call_id is the actual hook input.callID. Special subtask path can pass part.id instead of persisted part.callID; keep them separate. Arguments here are parsed JSON at this hook, not original provider argument bytes. tool_origin is unknown unless supported by observed evidence; never assign an MCP server from a tool-name guess."
+    },
+    "snapshot": {
+      "type": "object",
+      "properties": {
+        "mode": {
+          "enum": [
+            "live",
+            "replay_reconstructed",
+            "illustrative"
+          ]
+        },
+        "snapshot_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "plugin_instance_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "run_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sequence": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "collection_started_at_ms": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Unix milliseconds; null means unknown, never zero as a sentinel."
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "collection_finished_at_ms": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Unix milliseconds; null means unknown, never zero as a sentinel."
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "checkpoint_reference_at_ms": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Unix milliseconds; null means unknown, never zero as a sentinel."
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "atomic": {
+          "const": false
+        },
+        "history_transport": {
+          "const": "full"
+        },
+        "limitations": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "mode",
+        "snapshot_id",
+        "plugin_instance_id",
+        "run_id",
+        "sequence",
+        "collection_started_at_ms",
+        "collection_finished_at_ms",
+        "checkpoint_reference_at_ms",
+        "atomic",
+        "history_transport",
+        "limitations"
+      ],
+      "additionalProperties": false,
+      "description": "Plugin-generated run/snapshot IDs, not a harness-wide run ID. API enrichment spans time; sibling calls may progress while this call waits. Replay timestamps are reference boundaries, not measured hook arrival times."
+    },
+    "coverage": {
+      "type": "object",
+      "properties": {
+        "unavailable_fields": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "reason": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path",
+              "reason"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "redactions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "reason": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path",
+              "reason"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "omissions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "reason": {
+                "type": "string"
+              },
+              "omitted_items": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "omitted_bytes": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "path",
+              "reason",
+              "omitted_items",
+              "omitted_bytes"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "collection_errors": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "source": {
+                "type": "string"
+              },
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "source",
+              "code",
+              "message"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "upstream_truncation": {
+          "enum": [
+            "none_observed",
+            "observed",
+            "unknown"
+          ]
+        }
+      },
+      "required": [
+        "unavailable_fields",
+        "redactions",
+        "omissions",
+        "collection_errors",
+        "upstream_truncation"
+      ],
+      "additionalProperties": false,
+      "description": "Every plugin omission/redaction/collection failure must be explicit. none_observed is not proof of no upstream loss. unavailable differs from an observed empty array."
+    },
+    "binding": {
+      "type": "object",
+      "properties": {
+        "format": {
+          "const": "sha256-rfc8785-request-without-decision_binding"
+        },
+        "digest": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      },
+      "required": [
+        "format",
+        "digest"
+      ],
+      "additionalProperties": false,
+      "description": "SHA-256 of UTF-8 RFC 8785 canonical JSON of the entire request excluding top-level decision_binding. Bind response/override to this immutable snapshot and phase; reject non-I-JSON before transport, never silently recode. Transport credentials excluded."
+    },
+    "enforcement": {
+      "type": "object",
+      "properties": {
+        "classifier_unavailable": {
+          "const": "allow_with_harness_permissions"
+        },
+        "classifier_deny": {
+          "const": "ask_user"
+        },
+        "user_allow": {
+          "const": "allow_once_for_bound_checkpoint"
+        },
+        "user_reject": {
+          "const": "block_session_tree_and_request_abort"
+        },
+        "user_no_response": {
+          "const": "keep_blocked"
+        },
+        "classifier_timeout_ms": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "required": [
+        "classifier_unavailable",
+        "classifier_deny",
+        "user_allow",
+        "user_reject",
+        "user_no_response",
+        "classifier_timeout_ms"
+      ],
+      "additionalProperties": false,
+      "description": "Policy chosen for MVP. Classifier transport timeout/unavailable is fail-open and audited. Human waiting/rejection is not classifier unavailability. Post override releases this result, not permission to undo/re-run the tool. Native OpenCode restrictions still apply."
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "phase": {
+            "const": "pre_tool_call"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "checkpoint": {
+            "properties": {
+              "hook": {
+                "const": "tool.execute.before"
+              },
+              "stage": {
+                "const": "before_execution"
+              },
+              "raw_output": {
+                "type": "object",
+                "properties": {
+                  "args": {
+                    "type": "object",
+                    "additionalProperties": true
+                  }
+                },
+                "required": [
+                  "args"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          "current_call": {
+            "properties": {
+              "status": {
+                "const": "proposed"
+              },
+              "result": {
+                "type": "null"
+              },
+              "timestamps": {
+                "properties": {
+                  "post_observed_at_ms": {
+                    "type": "null"
+                  },
+                  "native_end_at_ms": {
+                    "type": "null"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "phase": {
+            "const": "post_tool_call"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "checkpoint": {
+            "properties": {
+              "hook": {
+                "const": "tool.execute.after"
+              },
+              "stage": {
+                "const": "before_result_release"
+              },
+              "raw_input": {
+                "required": [
+                  "args"
+                ]
+              }
+            }
+          },
+          "current_call": {
+            "properties": {
+              "status": {
+                "enum": [
+                  "returned",
+                  "result_missing"
+                ]
+              },
+              "result": {
+                "$ref": "#/$defs/result"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "current_call": {
+            "properties": {
+              "status": {
+                "const": "result_missing"
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "checkpoint": {
+            "properties": {
+              "raw_output": {
+                "type": "null"
+              }
+            }
+          },
+          "current_call": {
+            "properties": {
+              "result": {
+                "properties": {
+                  "format": {
+                    "const": "missing"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "current_call": {
+            "properties": {
+              "status": {
+                "const": "returned"
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "checkpoint": {
+            "properties": {
+              "raw_output": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            }
+          },
+          "current_call": {
+            "properties": {
+              "result": {
+                "properties": {
+                  "format": {
+                    "enum": [
+                      "builtin_output",
+                      "mcp_call_tool_result"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

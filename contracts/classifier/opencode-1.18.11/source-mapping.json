@@ -1,0 +1,82 @@
+{
+  "contract": "opencode-plugin-classifier",
+  "contract_version": "1.0.0",
+  "opencode_version": "1.18.11",
+  "plugin_api": "v1",
+  "fields": [
+    {
+      "path": "/current_call",
+      "source": "tool.execute.before / tool.execute.after + linked native tool part",
+      "available": "hook sessionID/callID/tool/args; resolve messageID/partID/provider/model via history. Keep unresolved IDs null."
+    },
+    {
+      "path": "/current_call/result",
+      "source": "tool.execute.after output",
+      "available": "builtin output + metadata/attachments, or raw MCP CallToolResult; may be undefined in special subtask path."
+    },
+    {
+      "path": "/context/sessions",
+      "source": "session.get/messages/children/status/todo/diff",
+      "available": "Full available persisted native history of current session and resolved tree; partial on deletion/API failure."
+    },
+    {
+      "path": "/context/delegations",
+      "source": "session parentID, task arguments and metadata, subtask parts",
+      "available": "Edges/prompt/agent/model/timing/return when observed; child model/ID/result not invented on pre. message.parentID is a message ID."
+    },
+    {
+      "path": "/context/observed_prompt_context",
+      "source": "chat.message, messages.transform, system.transform, chat.params, chat.headers, command.execute.before, compacting, compaction.autocontinue, text.complete, shell.env",
+      "available": "Independent JSON-safe snapshots, no exact assembled provider request, no global latest-by-session join."
+    },
+    {
+      "path": "/context/tool_catalog/definitions",
+      "source": "tool.definition cache / sdk.tool.list",
+      "available": "Builtin/plugin candidates. tool.list uses default agent; hook snapshot may precede additional description/schema transforms."
+    },
+    {
+      "path": "/context/runtime_configuration",
+      "source": "config.get, app.agents, selected provider/model, mcp.status",
+      "available": "Sanitized allowlisted projections; not raw auth/provider/MCP environment settings."
+    },
+    {
+      "path": "/context/skills_inventory",
+      "source": "GET /skill",
+      "available": "name/description/location/content inventory, not proof of exposure to model"
+    },
+    {
+      "path": "/context/mcp_resource_inventory",
+      "source": "GET /experimental/resource",
+      "available": "resource descriptors, not resource content/templates"
+    },
+    {
+      "path": "/context/journal",
+      "source": "plugin event/decision storage since attachment; pending permission events/API",
+      "available": "Observed asks/replies/classifier/user decisions, current gates and other in-flight calls. Not all implicit permission decisions."
+    },
+    {
+      "path": "/context/shared_resources",
+      "source": "arguments/results/history/observed file events",
+      "available": "Partial references and known read/write facts only"
+    },
+    {
+      "path": "/context/workspace",
+      "source": "PluginInput + path.get/project.current/vcs.get",
+      "available": "Directory/project/worktree/branch; not sandbox policy"
+    }
+  ],
+  "source_urls": [
+    "https://github.com/anomalyco/opencode/blob/v1.18.11/packages/plugin/src/index.ts",
+    "https://github.com/anomalyco/opencode/blob/v1.18.11/packages/opencode/src/session/tools.ts",
+    "https://github.com/anomalyco/opencode/blob/v1.18.11/packages/opencode/src/session/prompt.ts",
+    "https://github.com/anomalyco/opencode/blob/v1.18.11/packages/opencode/src/session/llm/request.ts",
+    "https://github.com/anomalyco/opencode/blob/v1.18.11/packages/opencode/src/session/compaction.ts",
+    "https://github.com/anomalyco/opencode/blob/v1.18.11/packages/opencode/src/tool/registry.ts",
+    "https://github.com/anomalyco/opencode/blob/v1.18.11/packages/opencode/src/mcp/catalog.ts",
+    "https://github.com/anomalyco/opencode/blob/v1.18.11/packages/opencode/src/permission/index.ts",
+    "https://github.com/anomalyco/opencode/blob/v1.18.11/packages/opencode/src/server/routes/instance/httpapi/handlers/experimental.ts",
+    "https://github.com/anomalyco/opencode/blob/v1.18.11/packages/opencode/src/server/routes/instance/httpapi/groups/session.ts",
+    "https://github.com/anomalyco/opencode/blob/v1.18.11/packages/opencode/src/server/routes/instance/httpapi/groups/instance.ts",
+    "https://github.com/anomalyco/opencode/blob/v1.18.11/packages/sdk/js/src/gen/sdk.gen.ts"
+  ]
+}

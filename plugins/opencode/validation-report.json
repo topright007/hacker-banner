@@ -1,0 +1,57 @@
+{
+  "opencode_version": "1.18.11",
+  "node_version": "24.19.0",
+  "platform": "macOS arm64",
+  "build": "passed",
+  "typecheck": "passed",
+  "format_check": "passed",
+  "unit_and_component_tests": {
+    "passed": 36,
+    "failed": 0
+  },
+  "live_tests": {
+    "passed": 3,
+    "failed": 0,
+    "model": "local deterministic OpenAI-compatible server",
+    "scenarios": [
+      "pre/post allow once",
+      "pre rejection prevents file write and further calls",
+      "post rejection prevents model receiving tool result and further calls"
+    ]
+  },
+  "live_context": {
+    "checkpoints_verified": 5,
+    "collection_errors": 0,
+    "observed": [
+      "native session info",
+      "full available session messages",
+      "actual message/part/call correlation",
+      "agent/provider/model identity",
+      "configuration projection",
+      "system and messages hook observations",
+      "registry tool descriptions"
+    ]
+  },
+  "review": "Independent review of the P2 coverage/MCP preview fixes and approval reload recovery completed without new findings. The previously identified startup P1 remains open.",
+  "limits": [
+    "Always-deny stub does not classify threats.",
+    "Live smoke uses builtin bash; child/MCP/partial API cases are covered by component tests, not a live remote MCP server.",
+    "Known OpenCode V1 limitations are documented in README.md.",
+    "Approval reload regression executes actual inline page JavaScript with a simulated browser environment; no automated real-browser reload test was run."
+  ],
+  "validated_at": "2026-10-03",
+  "regressions_verified": [
+    "Native availability fields and forged envelopes preserve valid coverage and real API errors.",
+    "Native availability fields reach classifier and user confirmation in both pre and post phases.",
+    "MCP extension output and numeric keys cannot replace actual content in the preview; immutable JSON retains all fields.",
+    "Structured MCP results and builtin attachments remain visible even with empty output.",
+    "Actual approval page JavaScript restores this tab's capability after reload and prefers a new URL capability.",
+    "Blocked, full or silently failing sessionStorage preserves the fragment for recovery."
+  ],
+  "known_open_findings": [
+    {
+      "severity": "P1",
+      "summary": "If plugin initialization fails, OpenCode can continue without sensor hooks. Fixing this was outside the requested P2/reload scope."
+    }
+  ]
+}

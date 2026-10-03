@@ -1,0 +1,62 @@
+{
+  "validator": "jsonschema 4.23.0 / Draft 2020-12",
+  "schemas_checked": [
+    "request",
+    "response",
+    "tool-outcome"
+  ],
+  "examples_validated": [
+    "post-tool-call.illustrative.json",
+    "post-tool-call.mcp.illustrative.json",
+    "post-tool-call.replay.json",
+    "pre-tool-call.illustrative.json",
+    "pre-tool-call.replay.json",
+    "response-allow.json",
+    "response-deny.json",
+    "response-unavailable.json",
+    "tool-error.observation.json"
+  ],
+  "native_messages_compatible": 399,
+  "native_parts_compatible": {
+    "text": 117,
+    "step-start": 341,
+    "tool": 285,
+    "step-finish": 341,
+    "reasoning": 97
+  },
+  "cross_field_checks": [
+    "hook/current call IDs and arguments",
+    "definition references",
+    "native session/message/part relations",
+    "response and recorded approval binding",
+    "response evidence pointers",
+    "replay source equality for prior messages",
+    "no final current-message stats/future message/current result/child ID on pre",
+    "post result separate from still-running history",
+    "fixture snapshot digests recomputed"
+  ],
+  "negative_checks": [
+    "pre rejects future current-tool result",
+    "post rejects pre hook",
+    "post requires actual args",
+    "not_observed is distinct from observed empty array",
+    "unsupported is not a supported availability state",
+    "rejects removed field /context/runtime_configuration/sandbox_policy",
+    "rejects removed field /context/runtime_configuration/effective_permission_decision",
+    "rejects removed field /context/tool_catalog/mcp_definitions",
+    "rejects removed field /context/sessions/0/timestamps/ended_at_ms",
+    "rejects removed field /context/sessions/0/timestamps/end_evidence",
+    "rejects removed field /current_call/mcp_server_id",
+    "rejects removed field /context/observed_prompt_context/value/0/correlation/model_request_id",
+    "rejects removed field /context/observed_prompt_context/value/0/correlation/model_request_kind",
+    "rejects removed field /context/tool_catalog/definitions/value/0/mcp_server_id",
+    "registry definitions cannot claim ordinary MCP origin",
+    "deny requires explanation",
+    "unavailable is not a classifier allow verdict"
+  ],
+  "limitations": [
+    "No implemented plugin or live OpenCode integration test.",
+    "Replay samples are conservative reconstructions, not live hook recordings.",
+    "JSON Schema does not enforce every cross-field relation; plugin must perform binding/ID/phase/correlation checks."
+  ]
+}

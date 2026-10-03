@@ -1,0 +1,87 @@
+{
+  "type": "object",
+  "properties": {
+    "contract": {
+      "const": "opencode-plugin-classifier"
+    },
+    "contract_version": {
+      "const": "1.0.0"
+    },
+    "type": {
+      "const": "tool_outcome_observation"
+    },
+    "observation_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "source": {
+      "enum": [
+        "message.part.updated",
+        "session.messages"
+      ]
+    },
+    "session_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "tool_call_id": {
+      "anyOf": [
+        {
+          "type": "string",
+          "minLength": 1
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "part_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "message_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "observed_at_ms": {
+      "anyOf": [
+        {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Unix milliseconds; null means unknown, never zero as a sentinel."
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "blocking": {
+      "const": false
+    },
+    "model_visibility": {
+      "const": "unknown"
+    },
+    "native_tool_part": {
+      "type": "object",
+      "additionalProperties": true
+    }
+  },
+  "required": [
+    "contract",
+    "contract_version",
+    "type",
+    "observation_id",
+    "source",
+    "session_id",
+    "tool_call_id",
+    "part_id",
+    "message_id",
+    "observed_at_ms",
+    "blocking",
+    "model_visibility",
+    "native_tool_part"
+  ],
+  "additionalProperties": false,
+  "description": "Supplementary telemetry for outcomes/errors that did not invoke the normal post hook. Not a post_tool_call gate. Add to the next request's journal/history; asynchronous detection cannot prove the model has not already consumed it.",
+  "$schema": "https://json-schema.org/draft/2020-12/schema"
+}
