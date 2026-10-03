@@ -5,7 +5,7 @@ import requestSchema from "./contracts/request.schema.json";
 import responseSchema from "./contracts/response.schema.json";
 
 export type Phase = "pre_tool_call" | "post_tool_call";
-export type ContractVersion = "2.1.0" | "2.2.0" | "2.3.0";
+export type ContractVersion = "2.1.0" | "2.2.0" | "2.3.0" | "2.4.0";
 // Native OpenCode objects deliberately preserve unknown fields. The wire boundary is
 // checked against the versioned JSON Schemas, not the older SDK's narrower typings.
 export type Native = Record<string, any>;

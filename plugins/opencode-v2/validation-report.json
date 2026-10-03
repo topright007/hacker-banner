@@ -1,92 +1,76 @@
 {
-  "plugin_version": "0.4.2",
-  "contract_version": "2.3.0",
+  "plugin_version": "0.5.0",
+  "contract_version": "2.4.0",
   "contract_versions": {
-    "stub": "2.3.0",
+    "stub": "2.4.0",
     "agent_monitor": "2.2.0",
-    "accepted": ["2.1.0", "2.2.0", "2.3.0"]
+    "accepted": ["2.1.0", "2.2.0", "2.3.0", "2.4.0"]
   },
   "opencode_version": "2.0.22",
   "node_version": "v24.19.0",
   "platform": "darwin arm64",
-  "validated_at": "2026-10-03T12:29:07.314Z",
-  "change": "Native approval forms now show the fixed text «Зафиксирована хакерская атака. Выберите возможные варианты действий» and options «Продолжить в режиме карантина» / «Принять риски и продолжить». Tool names and classifier reasons are not displayed in the approval form. Classifier integration, Agent Monitor, custom-answer quarantine and tool-error feedback behavior are unchanged.",
+  "validated_at": "2026-10-03T12:54:35.282428+00:00",
+  "change": "Native quarantine chosen in any descendant now latches the verified root and all descendants. Root ancestry is verified before the form and rechecked after the choice; an in-instance provisional hold prevents pending parallel approvals from releasing during revalidation. Invalid post-choice ancestry quarantines only the initiating branch. Classifier/Agent Monitor integrations and fixed form copy are preserved.",
   "build": "passed",
   "typecheck": "passed",
   "format_check": "passed",
   "unit_and_component_tests": {
-    "passed": 130,
+    "passed": 136,
     "failed": 0
   },
-  "tested_bundle_sha256": "080a261fe1bc927a662df3c1f7860e77077e2b4d14037ab48df157c791ac6a76",
+  "tested_bundle_sha256": "2113fbc19f4d68620140b01cc65e39a8a537f0982d518e24589a97bb5d7b5d2f",
   "packaged_live_tests": {
     "status": "passed",
-    "passed": 4,
+    "passed": 6,
     "failed": 0,
-    "installation": "Standalone immutable release-layout package without node_modules, copied from the current 0.4.2 bundle; actual pinned OpenCode 2.0.22 and a local deterministic model; no external LLM",
+    "installation": "Standalone immutable final bundle, actual pinned OpenCode 2.0.22 with isolated state and local deterministic model; no external LLM",
     "native_forms": {
-      "passed": 4,
-      "scenarios": ["shell/approve", "shell/cancel-pre", "shell/custom-pre", "shell/custom-post"],
-      "approval_copy": "The live form assertions verify the new fixed warning and option labels, without displaying tool names or classifier reasons.",
-      "custom_answers": "Actual form.reply accepts Russian free text at pre and literal allow at post. Both activate quarantine; continuation and next user turn have no tools or additional approvals; two native execution.succeeded events and no interrupted/failed events per custom case."
+      "passed": 6,
+      "scenarios": [
+        "shell/approve",
+        "shell/cancel-pre",
+        "shell/custom-pre",
+        "shell/custom-post",
+        "root-tree/pre",
+        "root-tree/post"
+      ],
+      "root_tree": "Quarantine chosen in real root -> parent -> grandchild sessions removes tool catalogs and retains text conversation for root, parent, initiating grandchild, existing sibling and new descendant. No additional forms/checkpoints; an unrelated root still executes an approved shell tool and receives its result."
     },
-    "interaction": "Native session/form APIs and local deterministic model; visual UI clicks not automated"
+    "interaction": "Native session/form APIs; visual Desktop/TUI clicks not automated"
   },
   "review": {
-    "status": "No new independent source review for 0.4.2; the prior native-approval review is retained below as historical evidence. Current release checks are typecheck, build, formatting, 130 unit/component tests and four native API live scenarios."
+    "status": "Independent focused runtime review completed; no remaining consequential findings. Failed ancestry must not update the verified cache; regression added for root-parent cycle. Documentation corrected for pre-form refusal versus post-choice branch fallback.",
+    "verified": [
+      "Parallel root/sibling allow decisions cannot release while this instance verifies a quarantine choice.",
+      "Root marker persists across plugin restart and is observed by other instances sharing the store; future descendants inherit quarantine.",
+      "Missing, malformed, mismatched, cyclic, changed or timed-out ancestry cannot persist an arbitrary root.",
+      "Unresolved root before a form refuses only the checkpoint; failed revalidation after choice persists the initiating branch when storage permits.",
+      "Allow and cancellation remain checkpoint-scoped; monitor runtime and classifier invocation remain intact.",
+      "Strict 2.1/2.2/2.3 compatibility and 2.4 root-quarantine policy, schemas and illustrative bindings validate."
+    ]
   },
   "limits": [
-    "OpenCode forms expose no input-origin metadata. Manually submitting the exact random trust value for the current form is indistinguishable from selecting its option. Ordinary typed text selects quarantine; Desktop blank input remains pending.",
-    "The default classifier is still an always-deny stub. The fixed attack warning is interface copy, not evidence of an actual detected attack; classifier unavailability fails open only outside active quarantine.",
-    "The native choices and custom-text quarantine apply to backend=stub. Agent Monitor uses its own strict policy and trusted operator approval; native forms cannot override it.",
-    "Already-running tools can finish; post quarantine cannot undo side effects. This plugin is not an OS sandbox.",
-    "Tool removal is applied at context/generate/compaction hooks. Other plugins and actions outside local hooks are outside this enforcement guarantee; run the sensor last.",
-    "A failed quarantine write keeps the current instance blocked but cannot guarantee persistence after restart.",
-    "New independent sessions are not quarantined; descendants inherit by parentID, not by fork provenance.",
-    "Explicitly disabling the sensor or changing its state directory changes enforcement; local state is not protected from a user or external process with filesystem access.",
-    "No dedicated assistant message is inserted; exact subsequent LLM wording is not guaranteed.",
-    "Native API integration tested; no manual Desktop/TUI visual click test.",
-    "Noninteractive opencode run cancels native forms; use Desktop or interactive TUI for manual approval.",
-    "Self-load failures before hook registration cannot be enforced by the plugin."
+    "The provisional hold is process-local. Other instances learn about root quarantine after the atomic marker write; already released or running tools are not cancelled and side effects cannot be undone.",
+    "The initiating root must be verified against the bound snapshot. Failure before a form refuses only that checkpoint. Failure after choosing quarantine keeps/persists only the initiating branch and reports that limitation.",
+    "A failed marker write keeps in-memory quarantine but cannot guarantee persistence after restart.",
+    "Old 0.4.x child-only quarantine markers retain their original scope; there is no automatic migration to a root.",
+    "Unrelated roots and fork provenance without a parentID relation are outside this tree quarantine.",
+    "Agent Monitor still does not support delegation; its strict run policy and service approvals are separate from native form quarantine. Its live tests were not rerun for this change; unit/component regressions are included.",
+    "The default classifier remains an always-deny stub. The fixed attack warning is requested UI copy, not evidence of detection. Classifier outages fail open only outside quarantine.",
+    "Native form API cannot distinguish a selected trust option from manual submission of its exact random per-form value; ordinary custom text selects quarantine.",
+    "Tool removal applies at context/generate/compaction hooks. Calls outside local hooks, later plugin mutations and already-running external operations remain outside this guarantee.",
+    "Disabling the sensor or changing state directories changes enforcement. State is not protected from a user or process with filesystem access.",
+    "No exact assistant wording or manual Desktop/TUI visual interaction is asserted. Noninteractive opencode run cancels forms."
   ],
   "previous_release_validation": {
-    "plugin_version": "0.4.0",
-    "source_commit": "18c61b829f70ef951525d5c7ec469381896a2283",
-    "bundle_sha256": "622eadf5bf3d1f5af0f105a7b0b3ac0673a8c05d2a867df1872edf09b1611509",
-    "passed": 19,
-    "native_forms_passed": 13,
-    "agent_monitor_passed": 6,
-    "note": "Historical 0.4.0 checks, not rerun against 0.4.2. Current focused native cases cover the changed approval path. Agent Monitor runtime is unchanged; current unit/component tests cover it, but its six live scenarios were not rerun for this release."
-  },
-  "previous_native_form_validation": {
-    "plugin_version": "0.4.1",
-    "validated_at": "2026-10-03T12:15:04.948169+00:00",
-    "bundle_sha256": "ddc1a31c9dd92121986d4500e5c9af4e0175cc0a743761eba9fa672886b6f591",
+    "plugin_version": "0.4.2",
+    "source_commit": "0285d4d201cd82129508a7024acaec2edd9d51b0",
+    "bundle_sha256": "080a261fe1bc927a662df3c1f7860e77077e2b4d14037ab48df157c791ac6a76",
     "unit_and_component_tests": {
       "passed": 130,
       "failed": 0
     },
-    "packaged_live_tests": {
-      "status": "passed",
-      "passed": 4,
-      "failed": 0,
-      "installation": "Standalone immutable release-layout packages without node_modules; actual pinned OpenCode 2.0.22; no external LLM",
-      "native_forms": {
-        "passed": 4,
-        "scenarios": ["shell/approve", "shell/cancel-pre", "shell/custom-pre", "shell/custom-post"],
-        "custom_answers": "Actual form.reply accepts Russian free text at pre and literal allow at post. Both activate quarantine; continuation and next user turn have no tools or additional approvals; two native execution.succeeded events and no interrupted/failed events per custom case."
-      },
-      "interaction": "Native session/form APIs and local deterministic model; visual UI clicks not automated"
-    },
-    "review": {
-      "status": "focused independent source review of native approval change; no consequential defects reported",
-      "verified": [
-        "Only the bound per-form random trust option value returns allow; all other structurally valid string replies return quarantine, including literal allow and displayed labels.",
-        "Form identity, immutable checkpoint binding, cancellation and cleanup checks are retained. Previous-form trust values cannot approve a later checkpoint.",
-        "The Desktop-rendered description includes warning, tool and bounded reason. custom=true allows the server to deliver arbitrary typed text to the plugin.",
-        "Existing classifier, Agent Monitor integration and quarantine enforcement are unchanged."
-      ]
-    },
-    "note": "Historical 0.4.1 evidence. The current 0.4.2 checks are reported separately above; this history is not added to current test counts."
+    "native_live_tests_passed": 4,
+    "note": "Historical evidence for the prior published release, not counted in 0.5.0 checks."
   }
 }

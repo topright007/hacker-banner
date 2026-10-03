@@ -8,20 +8,13 @@
       "const": "opencode-plugin-classifier"
     },
     "contract_version": {
-      "enum": [
-        "2.1.0",
-        "2.2.0",
-        "2.3.0"
-      ]
+      "enum": ["2.1.0", "2.2.0", "2.3.0", "2.4.0"]
     },
     "request_id": {
       "type": "string"
     },
     "phase": {
-      "enum": [
-        "pre_tool_call",
-        "post_tool_call"
-      ]
+      "enum": ["pre_tool_call", "post_tool_call"]
     },
     "harness": {
       "type": "object",
@@ -36,11 +29,7 @@
           "const": "v2"
         }
       },
-      "required": [
-        "name",
-        "version",
-        "plugin_api"
-      ],
+      "required": ["name", "version", "plugin_api"],
       "additionalProperties": false
     },
     "snapshot": {
@@ -114,10 +103,7 @@
           ]
         },
         "stage": {
-          "enum": [
-            "before_execution",
-            "before_result_release"
-          ]
+          "enum": ["before_execution", "before_result_release"]
         },
         "held_by_plugin": {
           "const": true
@@ -226,29 +212,16 @@
               "type": "object",
               "properties": {
                 "provider_id": {
-                  "type": [
-                    "string",
-                    "null"
-                  ]
+                  "type": ["string", "null"]
                 },
                 "model_id": {
-                  "type": [
-                    "string",
-                    "null"
-                  ]
+                  "type": ["string", "null"]
                 },
                 "variant": {
-                  "type": [
-                    "string",
-                    "null"
-                  ]
+                  "type": ["string", "null"]
                 }
               },
-              "required": [
-                "provider_id",
-                "model_id",
-                "variant"
-              ],
+              "required": ["provider_id", "model_id", "variant"],
               "additionalProperties": false
             },
             "source": {
@@ -258,12 +231,7 @@
               "type": "string"
             }
           },
-          "required": [
-            "agent_name",
-            "model",
-            "source",
-            "message_id"
-          ],
+          "required": ["agent_name", "model", "source", "message_id"],
           "additionalProperties": false
         },
         "arguments": {},
@@ -271,34 +239,21 @@
           "const": "direct_v2_hook_ids"
         },
         "status": {
-          "enum": [
-            "proposed",
-            "returned",
-            "error"
-          ]
+          "enum": ["proposed", "returned", "error"]
         },
         "timestamps": {
           "type": "object",
           "properties": {
             "pre_observed_at_ms": {
-              "type": [
-                "integer",
-                "null"
-              ],
+              "type": ["integer", "null"],
               "minimum": 0
             },
             "post_observed_at_ms": {
-              "type": [
-                "integer",
-                "null"
-              ],
+              "type": ["integer", "null"],
               "minimum": 0
             }
           },
-          "required": [
-            "pre_observed_at_ms",
-            "post_observed_at_ms"
-          ],
+          "required": ["pre_observed_at_ms", "post_observed_at_ms"],
           "additionalProperties": false
         },
         "result": {
@@ -310,10 +265,7 @@
               "type": "object",
               "properties": {
                 "format": {
-                  "enum": [
-                    "v2_tool_result",
-                    "v2_tool_error"
-                  ]
+                  "enum": ["v2_tool_result", "v2_tool_error"]
                 },
                 "native": {},
                 "normalized": {
@@ -337,11 +289,7 @@
                   "additionalProperties": false
                 }
               },
-              "required": [
-                "format",
-                "native",
-                "normalized"
-              ],
+              "required": ["format", "native", "normalized"],
               "additionalProperties": false
             }
           ]
@@ -406,16 +354,10 @@
                 "type": "string"
               },
               "parent_session_id": {
-                "type": [
-                  "string",
-                  "null"
-                ]
+                "type": ["string", "null"]
               },
               "delegation_depth": {
-                "type": [
-                  "integer",
-                  "null"
-                ],
+                "type": ["integer", "null"],
                 "minimum": 0
               },
               "native_info": {
@@ -478,10 +420,7 @@
                 "type": "string"
               },
               "delegation_depth": {
-                "type": [
-                  "integer",
-                  "null"
-                ],
+                "type": ["integer", "null"],
                 "minimum": 0
               },
               "relation_source": {
@@ -600,7 +539,7 @@
             },
             "approval_decisions": {
               "$ref": "#/$defs/envelope",
-              "description": "Own classifier and user decisions since attachment have scope=call. Session and related-session identities provide context, not a permanent enforcement scope."
+              "description": "Native plugin-owned audit observations. In 2.4, a verified root-tree quarantine choice has scope=session_tree, session_id identifying the initiating session, and a top-level quarantine_root_session_id identifying the verified root. After-choice root verification failure has scope=session without a root field. Other decisions remain scope=call; older 2.3 session-scoped records are preserved as historical evidence. Native fields remain intact inside the envelope."
             },
             "permission_evaluations": {
               "$ref": "#/$defs/envelope"
@@ -618,17 +557,10 @@
                   }
                 },
                 "reason": {
-                  "type": [
-                    "string",
-                    "null"
-                  ]
+                  "type": ["string", "null"]
                 }
               },
-              "required": [
-                "state",
-                "scope_session_ids",
-                "reason"
-              ],
+              "required": ["state", "scope_session_ids", "reason"],
               "additionalProperties": false,
               "description": "Current checkpoint wait state. scope_session_ids contains only the current call session. This compatibility field does not represent a persistent session/tree lock."
             }
@@ -662,28 +594,17 @@
       "type": "object",
       "properties": {
         "availability": {
-          "enum": [
-            "observed",
-            "partial",
-            "not_observed",
-            "collection_error"
-          ]
+          "enum": ["observed", "partial", "not_observed", "collection_error"]
         },
         "source": {
           "type": "string"
         },
         "collected_at_ms": {
-          "type": [
-            "integer",
-            "null"
-          ],
+          "type": ["integer", "null"],
           "minimum": 0
         },
         "reason": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": ["string", "null"]
         },
         "value": {}
       },
@@ -711,10 +632,7 @@
                 "type": "string"
               }
             },
-            "required": [
-              "path",
-              "reason"
-            ],
+            "required": ["path", "reason"],
             "additionalProperties": false
           }
         },
@@ -730,10 +648,7 @@
                 "type": "string"
               }
             },
-            "required": [
-              "path",
-              "reason"
-            ],
+            "required": ["path", "reason"],
             "additionalProperties": false
           }
         },
@@ -771,12 +686,7 @@
                 ]
               }
             },
-            "required": [
-              "path",
-              "reason",
-              "omitted_items",
-              "omitted_bytes"
-            ],
+            "required": ["path", "reason", "omitted_items", "omitted_bytes"],
             "additionalProperties": false
           }
         },
@@ -795,20 +705,12 @@
                 "type": "string"
               }
             },
-            "required": [
-              "source",
-              "code",
-              "message"
-            ],
+            "required": ["source", "code", "message"],
             "additionalProperties": false
           }
         },
         "upstream_truncation": {
-          "enum": [
-            "none_observed",
-            "observed",
-            "unknown"
-          ]
+          "enum": ["none_observed", "observed", "unknown"]
         }
       },
       "required": [
@@ -831,10 +733,7 @@
           ]
         },
         "classifier_deny": {
-          "enum": [
-            "ask_user",
-            "block_or_require_monitor_approval"
-          ]
+          "enum": ["ask_user", "block_or_require_monitor_approval"]
         },
         "user_allow": {
           "enum": [
@@ -849,27 +748,24 @@
           ]
         },
         "user_no_response": {
-          "enum": [
-            "keep_checkpoint_pending",
-            "keep_blocked"
-          ]
+          "enum": ["keep_checkpoint_pending", "keep_blocked"]
         },
         "classifier_timeout_ms": {
           "type": "integer",
           "minimum": 1
         },
         "backend": {
-          "enum": [
-            "stub",
-            "agent_monitor"
-          ]
+          "enum": ["stub", "agent_monitor"]
         },
         "monitor_run_id": {
           "type": "string",
           "minLength": 1
         },
         "user_quarantine": {
-          "const": "persist_session_and_descendants_chat_only"
+          "enum": [
+            "persist_session_and_descendants_chat_only",
+            "persist_root_and_descendants_chat_only"
+          ]
         }
       },
       "required": [
@@ -881,7 +777,7 @@
         "classifier_timeout_ms"
       ],
       "additionalProperties": false,
-      "description": "Versioned enforcement: 2.1.0 legacy call-scoped stub approvals; 2.2.0 fail-closed Agent Monitor policy with service approvals and execution permits; 2.3.0 native stub approvals with persistent session-and-descendants chat-only quarantine. Versions cannot mix their enforcement policies."
+      "description": "Versioned enforcement: 2.1.0 legacy call-scoped stub approvals; 2.2.0 fail-closed Agent Monitor; 2.3.0 persistent session-and-descendants quarantine; 2.4.0 verified root-and-descendants quarantine. Versions cannot mix their enforcement policies."
     },
     "binding": {
       "type": "object",
@@ -894,10 +790,7 @@
           "pattern": "^[a-f0-9]{64}$"
         }
       },
-      "required": [
-        "format",
-        "digest"
-      ],
+      "required": ["format", "digest"],
       "additionalProperties": false,
       "description": "SHA-256 of UTF-8 RFC 8785 canonical JSON of the entire request excluding top-level decision_binding. Bind response/override to this immutable snapshot and phase; reject non-I-JSON before transport, never silently recode. Transport credentials excluded."
     }
@@ -1053,6 +946,57 @@
             ],
             "additionalProperties": false,
             "description": "Classifier deny asks for either quarantine or allow. Allow releases only the bound checkpoint. Explicit quarantine persists chat-only mode for this session and its descendants: subsequent tools are blocked and pending results withheld. Form cancellation rejects only the current checkpoint. Classifier outages fail open only outside quarantine, subject to native permissions. Post decisions do not undo side effects."
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "contract_version": {
+            "const": "2.4.0"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "enforcement": {
+            "type": "object",
+            "properties": {
+              "classifier_unavailable": {
+                "const": "allow_with_harness_permissions"
+              },
+              "classifier_deny": {
+                "const": "ask_user"
+              },
+              "user_allow": {
+                "const": "allow_once_for_bound_checkpoint"
+              },
+              "user_reject": {
+                "const": "reject_tool_call_or_withhold_result"
+              },
+              "user_no_response": {
+                "const": "keep_checkpoint_pending"
+              },
+              "classifier_timeout_ms": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "user_quarantine": {
+                "const": "persist_root_and_descendants_chat_only"
+              }
+            },
+            "required": [
+              "classifier_unavailable",
+              "classifier_deny",
+              "user_allow",
+              "user_reject",
+              "user_no_response",
+              "classifier_timeout_ms",
+              "user_quarantine"
+            ],
+            "additionalProperties": false,
+            "description": "Explicit quarantine verifies the initiating session parentID chain through the harness and matches the resolved root to the bound snapshot. It persists chat-only mode for the root and all descendants, including parents and sibling branches of the initiating child. Unrelated roots are unaffected. Verification before the form must succeed or only the checkpoint is refused. After the quarantine choice, failed revalidation quarantines the initiating branch and attempts to persist it, without marking an unverified root. A provisional hold covers the previously verified tree within this instance during revalidation; other instances observe root activation after the marker is written. Allow and form cancellation remain checkpoint-scoped; classifier outages fail open only outside quarantine. Already completed side effects cannot be undone. Existing 2.3 child markers are not migrated."
           }
         }
       }

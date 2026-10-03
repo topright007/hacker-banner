@@ -64,8 +64,8 @@ await writeFile(
       package: pkg.name,
       version: pkg.version,
       harness: "OpenCode 2.0.22",
-      classifier_contract: "2.3.0",
-      classifier_contracts: { stub: "2.3.0", agent_monitor: "2.2.0" },
+      classifier_contract: "2.4.0",
+      classifier_contracts: { stub: "2.4.0", agent_monitor: "2.2.0" },
       monitor_protocol: 1,
       classifier:
         "default local always-deny stub; optional separately configured Agent Monitor HTTP backend",
