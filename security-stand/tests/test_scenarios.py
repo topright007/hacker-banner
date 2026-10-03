@@ -1,12 +1,20 @@
 import base64
+import os
 import unittest
+from unittest.mock import patch
 
-from stand import (ENCODED_ATTACK, SCENARIOS, SKILL_MARKER, config, image_revision,
+from stand import (ENCODED_ATTACK, SCENARIOS, SKILL_MARKER, config, image_revision, model_digest,
                    scenario_readme, scenario_skill, scenario_skill_files)
 from skill_exfiltration import APPROACHES, SKILL_MARKER as CAMPAIGN_MARKER, scenario_name
 
 
 class ScenarioCatalogTest(unittest.TestCase):
+    def test_remote_model_digest_is_explicitly_unavailable(self):
+        with patch.dict(os.environ, {'STAND_UPSTREAM': 'https://provider.example/v1'}):
+            value = model_digest('remote-model')
+        self.assertEqual(value['status'], 'unavailable')
+        self.assertEqual(value['model'], 'remote-model')
+
     def test_generated_config_uses_v2_schema(self):
         value = config('test-model')
         for legacy in ('autoupdate', 'enabled_providers', 'small_model', 'permission', 'provider'):

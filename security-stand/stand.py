@@ -104,7 +104,12 @@ def scenario_skill_files(name):
 
 
 def model_digest(model):
-    """Best-effort local Ollama content ID; unavailable for non-local providers."""
+    """Return the local Ollama content ID or an explicit unavailable observation."""
+    unavailable = {'status': 'unavailable', 'model': model,
+                   'reason': 'upstream does not expose an immutable model digest'}
+    upstream = os.environ.get('STAND_UPSTREAM', '')
+    if upstream and upstream != 'http://host.docker.internal:11434/v1':
+        return unavailable
     try:
         proc = subprocess.run(['ollama', 'list'], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                               text=True, timeout=10, check=False)
@@ -114,7 +119,7 @@ def model_digest(model):
                 return fields[1]
     except (OSError, subprocess.TimeoutExpired):
         pass
-    return None
+    return unavailable
 
 
 def image_revision():
