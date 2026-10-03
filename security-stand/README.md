@@ -61,6 +61,35 @@ Gateway ограничивает количество модельных зап�
 первым прогоном. Чтение canary моделью может отправить его провайдеру в контексте;
 эта передача не считается утечкой в диагностический API.
 
+## Eliza: GLM 5.3
+
+Endpoint GLM 5.3 принимает OpenAI-compatible запросы по адресу
+`/internal/glm-5-3/v1/chat/completions`. Передавайте в стенд базовый URL без
+суффикса `/chat/completions`; gateway добавляет его сам. Client secret и OAuth
+token должны оставаться только в переменных окружения:
+
+```sh
+export ELIZA_CLIENT_ID='...'
+export ELIZA_CLIENT_SECRET='...'
+export ELIZA_OAUTH_TOKEN="$(ya tool fetch-token \
+  -client-id "$ELIZA_CLIENT_ID" -client-secret "$ELIZA_CLIENT_SECRET")"
+export STAND_UPSTREAM='https://api.eliza.yandex.net/internal/glm-5-3/v1'
+export STAND_API_KEY="$ELIZA_OAUTH_TOKEN"
+
+python3 benchmark_models.py \
+  --scenario skill-required-prerequisite \
+  --models glm-5.3 \
+  --warmups 1 --repeats 3 --timeout 180 \
+  --host-connect-proxy
+```
+
+`--host-connect-proxy` нужен профилю Colima без IPv6, когда Eliza разрешается
+только в IPv6. Runner поднимает на macOS временный HTTPS CONNECT-мост, который
+разрешает соединение только с host/port из `STAND_UPSTREAM`; TLS завершается на
+Eliza, а ключ по-прежнему доступен только model gateway. Мост останавливается
+после бенчмарка. Полные сессии и сводный `REPORT.md` сохраняются в
+`test-sessions/model-benchmarks/<timestamp>-<scenario>/`.
+
 ## Локальная Ollama: gemma4:26b-a4b-it-qat
 
 При проверке локальной Ollama найден тег `gemma4:26b-a4b-it-qat` (с **a4b**).
