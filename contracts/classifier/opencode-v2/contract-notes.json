@@ -1,0 +1,45 @@
+{
+  "contract": "opencode-plugin-classifier",
+  "contract_version": "2.0.0",
+  "opencode_version": "2.0.22",
+  "package": "@opencode/plugin@2.0.22",
+  "plugin_api": "v2",
+  "scope": "Standalone V2 contract. V1 implementation and contract are preserved separately.",
+  "availability": [
+    "Only public Plugin.Context is used. It does not expose the complete SDK session.list/export/log/inbox/config/credential APIs. No additional unauthenticated HTTP client is created.",
+    "ctx.session.context returns active native messages after compaction. Every observed native message is retained by ID independently, including across compaction. This does not recover data from before plugin attachment, deleted data, or unobserved children.",
+    "Related sessions comprise the current session, ancestors resolved through session.get, and descendants learned from observed session.created events. tree_complete is always false; root resolution is separate.",
+    "Session parentID establishes lineage. fork provenance is retained in native_info and is not treated as a parent-child delegation. depth is derived only where the root chain is known.",
+    "Delegations contain proven parentID links and paths to observed child user messages. A child user message is evidence, not a claim that a particular parent tool call created it. Future IDs/prompts/results are not invented.",
+    "All snapshots are non-atomic; each source reports its own availability/source/time. Concurrent hooks may continue while APIs are read."
+  ],
+  "model_context": [
+    "context/compaction/generate/title hooks capture unified semantic system/messages/options and, where supplied, tools with descriptions and JSON Schema. They are observations at this plugin position, not guaranteed final provider payloads.",
+    "model.request supplies model routing/header metadata, not the semantic request body. Header values, URL credentials/query and arbitrary provider options are excluded.",
+    "http.request records a cloned outbound Request body and safe metadata when it can be read before the observation timeout. http.response records status/header names without consuming the streaming body. WebSocket send/receive frames can be observed separately.",
+    "Hooks have session/agent/model/kind but no universal model request ID or tool invocation link. No latest-global request joins are asserted. Later plugins and provider transport may still transform observed values.",
+    "Only the latest full snapshot per session/hook/kind is retained. Earlier snapshot IDs/timestamps/hashes remain in the metadata journal; exact previous system/tools/options snapshots are not recoverable. This omission is explicit.",
+    "Distinct semantic message values are separately retained by content hash. Identical messages deduplicate; this collection does not imply sequence or native message IDs. Native messages and event/tool journals supply their own provenance."
+  ],
+  "tool_catalog": [
+    "ctx.tool.list includes current registered tools after transforms, including available MCP tools. The registry is bound to the plugin instance location; its catalog may differ from the location or executable snapshot of a specific session.",
+    "Plain JSON input/output schemas are preserved. Effect schemas are converted with effect@4.0.0-rc.112 Schema.toJsonSchemaDocument, including definitions. Conversion is a projection and may not encode arbitrary refinements. Other StandardSchema values are marked unavailable.",
+    "The tool map in a semantic context hook is the model-facing map at that hook stage. In Code Mode some tool exposure is through the execute namespace description, while registry tools remain separately visible.",
+    "No MCP exporter identity is inferred from a tool-name prefix. options.namespace is retained as registry evidence only.",
+    "V2 tool hooks supply sessionID/agent/messageID/id directly and report completed or error after outcomes. Code Mode inner calls can reuse outer id/messageID; request_id and full content binding identify a checkpoint, not id alone.",
+    "Tool.Result content may be text or content blocks; output may be structured. JSON-compatible extensions are preserved. Tool.Error is serialized explicitly so message/metadata are not lost."
+  ],
+  "permissions_and_privacy": [
+    "Native session/agent permission rules and pending requests are available; permission.evaluate observations capture allow/ask evaluation stages. Explicit configured deny skips the hook, and later hooks may change the decision.",
+    "Configuration projections exclude credential values, provider/model headers and arbitrary body/settings. Global credential/integration events are not collected. Only session/permission events with session IDs enter the journal.",
+    "Original prompts, tool descriptions, arguments, results, semantic messages and native session content remain intact and may contain secrets. A real classifier must be an explicitly configured trusted recipient.",
+    "Shared resources are pointers found in observed attachments/arguments/results, with exact source paths. They do not prove reads, writes or sharing. Referenced files, blobs and URLs are not fetched.",
+    "No OS sandbox/network policy or syscall interception is provided. Transport/permission hooks improve observation but do not undo side effects or make every operation synchronous."
+  ],
+  "retention": [
+    "Event/tool/approval journals and message archives start at attachment and are not automatically restored after restart. durable_across_restart is false.",
+    "Deduplication and retaining only the latest full hook snapshots avoid repeatedly retaining full historical model contexts. Journals and unique message data still grow without automatic rotation."
+  ],
+  "examples": "examples/*.illustrative.json are synthetic mocked-Context examples validated with the same schema and binding code, not recordings from a real session.",
+  "validation": "collector tests cover native schema-spoof input, API failures, credentials, compaction retention, Effect/MCP schemas, successful/error post outcomes, transport body ownership and Code Mode ID reuse."
+}

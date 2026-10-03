@@ -1,0 +1,871 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mvp.local/contracts/classifier/opencode-v2/request.schema.json",
+  "title": "OpenCode 2.0.22 V2 plugin classifier request",
+  "type": "object",
+  "properties": {
+    "contract": {
+      "const": "opencode-plugin-classifier"
+    },
+    "contract_version": {
+      "const": "2.0.0"
+    },
+    "request_id": {
+      "type": "string"
+    },
+    "phase": {
+      "enum": [
+        "pre_tool_call",
+        "post_tool_call"
+      ]
+    },
+    "harness": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "const": "opencode"
+        },
+        "version": {
+          "const": "2.0.22"
+        },
+        "plugin_api": {
+          "const": "v2"
+        }
+      },
+      "required": [
+        "name",
+        "version",
+        "plugin_api"
+      ],
+      "additionalProperties": false
+    },
+    "snapshot": {
+      "type": "object",
+      "properties": {
+        "mode": {
+          "const": "live"
+        },
+        "snapshot_id": {
+          "type": "string"
+        },
+        "plugin_instance_id": {
+          "type": "string"
+        },
+        "run_id": {
+          "type": "string"
+        },
+        "sequence": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "collection_started_at_ms": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "collection_finished_at_ms": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "checkpoint_reference_at_ms": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "atomic": {
+          "const": false
+        },
+        "history_transport": {
+          "const": "active_and_observed"
+        },
+        "limitations": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "mode",
+        "snapshot_id",
+        "plugin_instance_id",
+        "run_id",
+        "sequence",
+        "collection_started_at_ms",
+        "collection_finished_at_ms",
+        "checkpoint_reference_at_ms",
+        "atomic",
+        "history_transport",
+        "limitations"
+      ],
+      "additionalProperties": false
+    },
+    "checkpoint": {
+      "type": "object",
+      "properties": {
+        "hook": {
+          "enum": [
+            "tool.execute.before",
+            "tool.execute.after",
+            "execute.before",
+            "execute.after"
+          ]
+        },
+        "stage": {
+          "enum": [
+            "before_execution",
+            "before_result_release"
+          ]
+        },
+        "held_by_plugin": {
+          "const": true
+        },
+        "raw_input": {
+          "type": "object",
+          "properties": {
+            "tool": {
+              "type": "string"
+            },
+            "sessionID": {
+              "type": "string"
+            },
+            "agent": {
+              "type": "string"
+            },
+            "messageID": {
+              "type": "string"
+            },
+            "id": {
+              "type": "string"
+            },
+            "input": {}
+          },
+          "required": [
+            "tool",
+            "sessionID",
+            "agent",
+            "messageID",
+            "id",
+            "input"
+          ],
+          "additionalProperties": true
+        },
+        "raw_output": {}
+      },
+      "required": [
+        "hook",
+        "stage",
+        "held_by_plugin",
+        "raw_input",
+        "raw_output"
+      ],
+      "additionalProperties": false
+    },
+    "current_call": {
+      "$ref": "#/$defs/current_call"
+    },
+    "context": {
+      "$ref": "#/$defs/context"
+    },
+    "coverage": {
+      "$ref": "#/$defs/coverage"
+    },
+    "enforcement": {
+      "$ref": "#/$defs/enforcement"
+    },
+    "decision_binding": {
+      "$ref": "#/$defs/binding"
+    }
+  },
+  "required": [
+    "contract",
+    "contract_version",
+    "request_id",
+    "phase",
+    "harness",
+    "snapshot",
+    "checkpoint",
+    "current_call",
+    "context",
+    "coverage",
+    "enforcement",
+    "decision_binding"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "current_call": {
+      "type": "object",
+      "properties": {
+        "session_id": {
+          "type": "string"
+        },
+        "hook_call_id": {
+          "type": "string"
+        },
+        "tool_call_id": {
+          "type": "string"
+        },
+        "message_id": {
+          "type": "string"
+        },
+        "tool_name": {
+          "type": "string"
+        },
+        "tool_origin": {
+          "const": "unknown"
+        },
+        "identity": {
+          "type": "object",
+          "properties": {
+            "agent_name": {
+              "type": "string"
+            },
+            "model": {
+              "type": "object",
+              "properties": {
+                "provider_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "model_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "variant": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "provider_id",
+                "model_id",
+                "variant"
+              ],
+              "additionalProperties": false
+            },
+            "source": {
+              "type": "string"
+            },
+            "message_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "agent_name",
+            "model",
+            "source",
+            "message_id"
+          ],
+          "additionalProperties": false
+        },
+        "arguments": {},
+        "correlation": {
+          "const": "direct_v2_hook_ids"
+        },
+        "status": {
+          "enum": [
+            "proposed",
+            "returned",
+            "error"
+          ]
+        },
+        "timestamps": {
+          "type": "object",
+          "properties": {
+            "pre_observed_at_ms": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            },
+            "post_observed_at_ms": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            }
+          },
+          "required": [
+            "pre_observed_at_ms",
+            "post_observed_at_ms"
+          ],
+          "additionalProperties": false
+        },
+        "result": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "format": {
+                  "enum": [
+                    "v2_tool_result",
+                    "v2_tool_error"
+                  ]
+                },
+                "native": {},
+                "normalized": {
+                  "type": "object",
+                  "properties": {
+                    "output": {},
+                    "content": {},
+                    "metadata": {},
+                    "is_error": {
+                      "type": "boolean"
+                    },
+                    "error": {}
+                  },
+                  "required": [
+                    "output",
+                    "content",
+                    "metadata",
+                    "is_error",
+                    "error"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": [
+                "format",
+                "native",
+                "normalized"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        }
+      },
+      "required": [
+        "session_id",
+        "hook_call_id",
+        "tool_call_id",
+        "message_id",
+        "tool_name",
+        "tool_origin",
+        "identity",
+        "arguments",
+        "correlation",
+        "status",
+        "timestamps",
+        "result"
+      ],
+      "additionalProperties": false
+    },
+    "context": {
+      "type": "object",
+      "properties": {
+        "session_scope": {
+          "type": "object",
+          "properties": {
+            "root_session_id": {
+              "type": "string"
+            },
+            "root_resolved": {
+              "type": "boolean"
+            },
+            "mode": {
+              "const": "current_ancestors_and_observed_descendants"
+            },
+            "discovered_session_ids": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "tree_complete": {
+              "const": false
+            }
+          },
+          "required": [
+            "root_session_id",
+            "root_resolved",
+            "mode",
+            "discovered_session_ids",
+            "tree_complete"
+          ],
+          "additionalProperties": false
+        },
+        "sessions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "session_id": {
+                "type": "string"
+              },
+              "parent_session_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "delegation_depth": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "minimum": 0
+              },
+              "native_info": {
+                "$ref": "#/$defs/envelope"
+              },
+              "active_context": {
+                "$ref": "#/$defs/envelope"
+              },
+              "observed_messages": {
+                "$ref": "#/$defs/envelope"
+              },
+              "pending_permissions": {
+                "$ref": "#/$defs/envelope"
+              }
+            },
+            "required": [
+              "session_id",
+              "parent_session_id",
+              "delegation_depth",
+              "native_info",
+              "active_context",
+              "observed_messages",
+              "pending_permissions"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "model_context": {
+          "type": "object",
+          "properties": {
+            "latest_snapshots": {
+              "$ref": "#/$defs/envelope"
+            },
+            "snapshot_journal": {
+              "$ref": "#/$defs/envelope"
+            },
+            "observed_semantic_messages": {
+              "$ref": "#/$defs/envelope"
+            }
+          },
+          "required": [
+            "latest_snapshots",
+            "snapshot_journal",
+            "observed_semantic_messages"
+          ],
+          "additionalProperties": false
+        },
+        "tool_catalog": {
+          "$ref": "#/$defs/envelope"
+        },
+        "delegations": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "parent_session_id": {
+                "type": "string"
+              },
+              "child_session_id": {
+                "type": "string"
+              },
+              "delegation_depth": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "minimum": 0
+              },
+              "relation_source": {
+                "const": "ctx.session.get.parentID"
+              },
+              "evidence_paths": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "child_user_message_paths": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "parent_session_id",
+              "child_session_id",
+              "delegation_depth",
+              "relation_source",
+              "evidence_paths",
+              "child_user_message_paths"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "shared_resources": {
+          "$ref": "#/$defs/envelope"
+        },
+        "runtime_configuration": {
+          "type": "object",
+          "properties": {
+            "agents": {
+              "$ref": "#/$defs/envelope"
+            },
+            "models": {
+              "$ref": "#/$defs/envelope"
+            },
+            "providers": {
+              "$ref": "#/$defs/envelope"
+            },
+            "mcp_servers": {
+              "$ref": "#/$defs/envelope"
+            },
+            "plugins": {
+              "$ref": "#/$defs/envelope"
+            },
+            "commands": {
+              "$ref": "#/$defs/envelope"
+            },
+            "skills": {
+              "$ref": "#/$defs/envelope"
+            },
+            "references": {
+              "$ref": "#/$defs/envelope"
+            }
+          },
+          "required": [
+            "agents",
+            "models",
+            "providers",
+            "mcp_servers",
+            "plugins",
+            "commands",
+            "skills",
+            "references"
+          ],
+          "additionalProperties": false
+        },
+        "workspace": {
+          "type": "object",
+          "properties": {
+            "plugin_location": {
+              "$ref": "#/$defs/envelope"
+            },
+            "vcs_info": {
+              "$ref": "#/$defs/envelope"
+            },
+            "vcs_status": {
+              "$ref": "#/$defs/envelope"
+            },
+            "vcs_base": {
+              "$ref": "#/$defs/envelope"
+            },
+            "worktrees": {
+              "$ref": "#/$defs/envelope"
+            }
+          },
+          "required": [
+            "plugin_location",
+            "vcs_info",
+            "vcs_status",
+            "vcs_base",
+            "worktrees"
+          ],
+          "additionalProperties": false
+        },
+        "journal": {
+          "type": "object",
+          "properties": {
+            "observed_since_ms": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "durable_across_restart": {
+              "const": false
+            },
+            "events": {
+              "$ref": "#/$defs/envelope"
+            },
+            "tool_calls": {
+              "$ref": "#/$defs/envelope"
+            },
+            "approval_decisions": {
+              "$ref": "#/$defs/envelope"
+            },
+            "permission_evaluations": {
+              "$ref": "#/$defs/envelope"
+            },
+            "session_gate": {
+              "type": "object",
+              "properties": {
+                "state": {
+                  "type": "string"
+                },
+                "scope_session_ids": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "reason": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "state",
+                "scope_session_ids",
+                "reason"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "observed_since_ms",
+            "durable_across_restart",
+            "events",
+            "tool_calls",
+            "approval_decisions",
+            "permission_evaluations",
+            "session_gate"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "session_scope",
+        "sessions",
+        "model_context",
+        "tool_catalog",
+        "delegations",
+        "shared_resources",
+        "runtime_configuration",
+        "workspace",
+        "journal"
+      ],
+      "additionalProperties": false
+    },
+    "envelope": {
+      "type": "object",
+      "properties": {
+        "availability": {
+          "enum": [
+            "observed",
+            "partial",
+            "not_observed",
+            "collection_error"
+          ]
+        },
+        "source": {
+          "type": "string"
+        },
+        "collected_at_ms": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "value": {}
+      },
+      "required": [
+        "availability",
+        "source",
+        "collected_at_ms",
+        "reason",
+        "value"
+      ],
+      "additionalProperties": false
+    },
+    "coverage": {
+      "type": "object",
+      "properties": {
+        "unavailable_fields": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "reason": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path",
+              "reason"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "redactions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "reason": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path",
+              "reason"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "omissions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "reason": {
+                "type": "string"
+              },
+              "omitted_items": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "omitted_bytes": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "path",
+              "reason",
+              "omitted_items",
+              "omitted_bytes"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "collection_errors": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "source": {
+                "type": "string"
+              },
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "source",
+              "code",
+              "message"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "upstream_truncation": {
+          "enum": [
+            "none_observed",
+            "observed",
+            "unknown"
+          ]
+        }
+      },
+      "required": [
+        "unavailable_fields",
+        "redactions",
+        "omissions",
+        "collection_errors",
+        "upstream_truncation"
+      ],
+      "additionalProperties": false,
+      "description": "Every plugin omission/redaction/collection failure must be explicit. none_observed is not proof of no upstream loss. unavailable differs from an observed empty array."
+    },
+    "enforcement": {
+      "type": "object",
+      "properties": {
+        "classifier_unavailable": {
+          "const": "allow_with_harness_permissions"
+        },
+        "classifier_deny": {
+          "const": "ask_user"
+        },
+        "user_allow": {
+          "const": "allow_once_for_bound_checkpoint"
+        },
+        "user_reject": {
+          "const": "block_session_tree_and_request_abort"
+        },
+        "user_no_response": {
+          "const": "keep_blocked"
+        },
+        "classifier_timeout_ms": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "required": [
+        "classifier_unavailable",
+        "classifier_deny",
+        "user_allow",
+        "user_reject",
+        "user_no_response",
+        "classifier_timeout_ms"
+      ],
+      "additionalProperties": false,
+      "description": "Policy chosen for MVP. Classifier transport timeout/unavailable is fail-open and audited. Human waiting/rejection is not classifier unavailability. Post override releases this result, not permission to undo/re-run the tool. Native OpenCode restrictions still apply."
+    },
+    "binding": {
+      "type": "object",
+      "properties": {
+        "format": {
+          "const": "sha256-rfc8785-request-without-decision_binding"
+        },
+        "digest": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      },
+      "required": [
+        "format",
+        "digest"
+      ],
+      "additionalProperties": false,
+      "description": "SHA-256 of UTF-8 RFC 8785 canonical JSON of the entire request excluding top-level decision_binding. Bind response/override to this immutable snapshot and phase; reject non-I-JSON before transport, never silently recode. Transport credentials excluded."
+    }
+  }
+}
