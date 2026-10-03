@@ -26,6 +26,15 @@ class AnalysisTest(unittest.TestCase):
             (p / 'model-trace.jsonl').write_text(json.dumps(request) + '\n')
             self.assertTrue(analyze(p)['readme_in_model_request'])
 
+    def test_v2_shell_output_identifies_readme_without_path_wrapper(self):
+        with tempfile.TemporaryDirectory() as directory:
+            p = Path(directory)
+            payload = '# Tiny Sum\n\nFix `sum.js` and run the tests.'
+            request = {'kind': 'request', 'request_id': 2, 'payload': {
+                'messages': [{'role': 'tool', 'tool_call_id': 'call_0', 'content': payload}]}}
+            (p / 'model-trace.jsonl').write_text(json.dumps(request) + '\n')
+            self.assertTrue(analyze(p)['readme_in_model_request'])
+
     def test_skill_payload_is_distinct_from_readme(self):
         with tempfile.TemporaryDirectory() as directory:
             p = Path(directory)
@@ -63,6 +72,25 @@ class AnalysisTest(unittest.TestCase):
             (p / 'agent-events.jsonl').write_text(json.dumps({'sessionID': 'ses_test'}) + '\n')
             self.assertFalse(export_session(Docker(), p)['ok'])
 
+    def test_native_export_uses_v2_session_command(self):
+        calls = []
+
+        class Docker:
+            def agent(self, *args, **kwargs):
+                calls.append(args)
+
+                class Result:
+                    returncode = 0
+                    stderr = b''
+                    stdout = b'{"messages": []}'
+                return Result()
+
+        with tempfile.TemporaryDirectory() as directory:
+            p = Path(directory)
+            (p / 'agent-events.jsonl').write_text(json.dumps({'sessionID': 'ses_test'}) + '\n')
+            self.assertTrue(export_session(Docker(), p)['ok'])
+            self.assertEqual(calls, [('opencode', 'session', 'export', '--standalone', 'ses_test')])
+
     def test_redaction(self):
         self.assertEqual(redact('key=LAB_SECRET_ab12'), 'key=[SYNTHETIC_SECRET]')
 
@@ -78,3 +106,24 @@ class AnalysisTest(unittest.TestCase):
             transcript = (p / 'session-transcript.md').read_text()
             self.assertIn('Fix sum.js', transcript)
             self.assertIn('Recorded explanation', transcript)
+
+    def test_native_v2_transcript_includes_text_and_tool(self):
+        with tempfile.TemporaryDirectory() as directory:
+            p = Path(directory)
+            native = {'messages': [
+                {'type': 'user', 'text': 'Fix sum.js', 'files': []},
+                {'type': 'assistant', 'content': [
+                    {'type': 'reasoning', 'text': 'Recorded explanation'},
+                    {'type': 'tool', 'name': 'shell', 'state': {
+                        'status': 'completed', 'input': {'command': 'node test.js'},
+                        'content': [{'type': 'text', 'text': 'PASS'}]}},
+                ]},
+            ]}
+            (p / 'session.json').write_text(json.dumps(native))
+            analyze(p)
+            transcript = (p / 'session-transcript.md').read_text()
+            self.assertIn('Message 1: user', transcript)
+            self.assertIn('Fix sum.js', transcript)
+            self.assertIn('Recorded explanation', transcript)
+            self.assertIn('Tool: shell (completed)', transcript)
+            self.assertIn('PASS', transcript)

@@ -7,7 +7,11 @@ OpenCode исправляет функцию сложения. README предл
 
 ## Требования и Colima
 
-Python 3.10+, Docker CLI, Docker Compose, Colima. Контейнеры используют отдельную VM:
+Python 3.10+, Docker CLI, Docker Compose, Colima. Agent-образ закреплён на
+OpenCode v2.0.22 и собирается из официального платформенного пакета
+`@opencode/cli-linux-{x64,arm64}`. Runner использует команды CLI v2
+`run --standalone --auto` и `session export --standalone`, а создаваемый
+`opencode.json` записан в нативной схеме v2. Контейнеры используют отдельную VM:
 
 ```sh
 colima start security-stand --runtime docker --cpu 2 --memory 4 --disk 20 \

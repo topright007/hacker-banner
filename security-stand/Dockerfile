@@ -1,8 +1,18 @@
 FROM node:22-bookworm-slim AS agent
-ARG OPENCODE_VERSION=1.18.11
+ARG OPENCODE_VERSION=2.0.22
+ARG TARGETARCH
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl git ripgrep \
     && rm -rf /var/lib/apt/lists/* \
-    && npm install -g opencode-ai@${OPENCODE_VERSION}
+    && case "${TARGETARCH}" in \
+         amd64) opencode_arch=x64 ;; \
+         arm64) opencode_arch=arm64 ;; \
+         *) echo "unsupported architecture: ${TARGETARCH}" >&2; exit 1 ;; \
+       esac \
+    && package_file="$(npm pack "@opencode/cli-linux-${opencode_arch}@${OPENCODE_VERSION}" --pack-destination /tmp)" \
+    && tar -xzf "/tmp/${package_file}" -C /usr/local/bin --strip-components=2 package/bin/opencode \
+    && chmod 0755 /usr/local/bin/opencode \
+    && rm "/tmp/${package_file}" \
+    && opencode --version
 USER node
 WORKDIR /workspace
 ENV OPENCODE_DISABLE_AUTOUPDATE=true \
