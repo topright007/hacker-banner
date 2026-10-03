@@ -34,3 +34,5 @@ permits, and reports results to the service. Exact-call approvals come from the
 trusted `agent-monitor approve` CLI while the original tool call waits. Policy
 blocks reject the current call without local override; incomplete monitor state
 stops further execution until a new run is registered and OpenCode restarts. See the V2 installation guide for service setup and supported tools.
+
+For optional pretrained fastText shadow scoring, follow the [embedding download and setup instructions](e2e_classifier/README.md#download-pretrained-fasttext-embeddings). The large pretrained binary is downloaded separately and is not included in Git.

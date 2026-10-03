@@ -22,6 +22,53 @@ The current JSON model and aggregate evaluation metrics are committed in [`model
 
 Raw training artifacts are local, ignored by Git and Docker, and private (`0600`, containing synthetic session excerpts). Only the classifier and aggregate metrics are published. The classifier artifact is JSON vocabulary/IDF/linear weights, not pickle. Runtime inference uses Python's standard library; training requires the optional ML dependencies. JSON scoring was checked against scikit-learn to within `1e-10`. The inference score is **not a calibrated probability**. Low feature coverage yields an abstention, not permission to proceed.
 
+### Download pretrained fastText embeddings
+
+The pretrained classifier needs the official English `cc.en.300.bin` file; it is **not included in Git**. Activate the separate project Conda environment (see below) and run this block from `e2e_classifier/`. The download is about **4.5 GB**, expands to **7.24 GB**, and requires about **15 GB free disk** with the archive/overhead retained. Loading the encoder used about **5.3 GB RAM** on this Mac. Installing `fasttext` on a fresh machine may require C++ build tools.
+
+```bash
+bash <<'SETUP'
+set -eu
+umask 077
+python -m pip install -e '.[fasttext]'
+mkdir -p .runtime/embeddings
+
+# Reuse an existing binary; resume an interrupted archive download otherwise.
+if [ ! -f .runtime/embeddings/cc.en.300.bin ]; then
+  curl --fail --location --retry 3 --continue-at - \
+    --output .runtime/embeddings/cc.en.300.bin.gz \
+    https://dl.fbaipublicfiles.com/fasttext/vectors-crawl/cc.en.300.bin.gz
+  gzip -dk .runtime/embeddings/cc.en.300.bin.gz
+fi
+
+# Verify the exact frozen binary expected by the committed classifier.
+printf '%s  %s\n' \
+  '14c7167b130056944cbdc37b7451f055867fe9a4e3fed3bbc1ecc0e74f6763ca' \
+  '.runtime/embeddings/cc.en.300.bin' | shasum -a 256 -c -
+chmod 400 .runtime/embeddings/cc.en.300.bin
+
+# Hard link, not a symlink; the model loader rejects symlinks.
+if [ ! -e models/action-risk-fasttext/context.fasttext.bin ]; then
+  ln .runtime/embeddings/cc.en.300.bin \
+    models/action-risk-fasttext/context.fasttext.bin
+fi
+python -m agent_monitor.action_risk.cli score \
+  --model models/action-risk-fasttext/model.json \
+  --input config/action-risk-exfil.example.json
+SETUP
+```
+
+The block stops on a download, checksum, or setup error. On Linux, if `shasum` is unavailable, replace `shasum -a 256 -c -` with `sha256sum -c -`. The recorded checksum is a local integrity record, not a publisher-signed checksum. An existing binary/link is reused, and the archive is retained. Both cache and large model binary remain ignored by Git; the hard link uses the same underlying file and adds no second copy. The two directories must be on the same filesystem.
+
+After the smoke test succeeds, enable **shadow-only** scoring for a newly started monitor:
+
+```bash
+export MONITOR_ACTION_RISK_MODEL="$PWD/models/action-risk-fasttext/model.json"
+agent-monitor serve
+```
+
+Keep the weights and monitor installation outside the agent's writable workspace. Source/attribution and the pretrained vectors' CC BY-SA 3.0 license are recorded in the [fastText model card](models/action-risk-fasttext/README.md). The TF-IDF baseline below does not require this download.
+
 ### Train or score
 
 ```bash
