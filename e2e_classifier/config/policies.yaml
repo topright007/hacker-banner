@@ -1,0 +1,68 @@
+version: prototype-1
+max_calls: 100
+approval_ttl_seconds: 300
+permit_ttl_seconds: 120
+protected_paths:
+  - opencode.json
+  - opencode.jsonc
+  - '**/opencode.json'
+  - '**/opencode.jsonc'
+  - .env
+  - .env.*
+  - '**/.env'
+  - '**/.env.*'
+  - .git/**
+  - .opencode/**
+  - .monitor/**
+  - .conda-env/**
+  - .venv/**
+  - config/policies.yaml
+  - adapters/**
+sensitive_paths:
+  - private/**
+  - '**/private/**'
+  - '**/*customer*'
+  - '*customer*'
+profiles:
+  review:
+    mutations: false
+    outbound: false
+    destinations: []
+    allowed_tools: [read, todowrite, todoread, question, fixture_read_public]
+  implement:
+    mutations: true
+    outbound: false
+    destinations: []
+  research:
+    mutations: false
+    outbound: true
+    destinations: [https://example.com]
+  fixture:
+    mutations: true
+    outbound: true
+    destinations: [collector.local, recipient@example.test]
+# Native argument names follow V2 (path, not V1 filePath). MCP metadata cannot grant authority.
+tools:
+  read: {effect: read, path_argument: path, sensitive: true}
+  glob: {effect: opaque}
+  grep: {effect: opaque}
+  edit: {effect: write, path_argument: path}
+  write: {effect: write, path_argument: path}
+  patch: {effect: opaque}
+  apply_patch: {effect: opaque}
+  shell: {effect: shell}
+  bash: {effect: shell}
+  execute: {effect: opaque}
+  task: {effect: delegate}
+  subagent: {effect: delegate}
+  webfetch: {effect: outbound, destination_argument: url}
+  websearch: {effect: opaque}
+  todowrite: {effect: internal}
+  todoread: {effect: internal}
+  question: {effect: internal}
+  fixture_read_public: {effect: read, sensitive: false}
+  fixture_read_private: {effect: read, sensitive: true}
+  fixture_send: {effect: outbound, destination_argument: destination}
+  fixture_delete: {effect: destructive}
+  fixture_book: {effect: destructive}
+  fixture_redirect_payment: {effect: destructive}
