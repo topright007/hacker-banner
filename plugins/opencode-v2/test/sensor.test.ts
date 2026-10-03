@@ -11,7 +11,7 @@ import {
   type ClassifierResponse,
   responseFor,
 } from "../src/protocol.js";
-import { SessionBlockedError } from "../src/gates.js";
+import { ActionRejectedError } from "../src/gates.js";
 import type { Classifier } from "../src/classifier.js";
 
 class UI implements ApprovalUI {
@@ -224,7 +224,7 @@ test("registered V2 hooks hold each pre/post and persist bound context", async (
     await pending(f.ui, 1);
     assert.equal(done, false);
     const first = f.ui.pending[0].request;
-    assert.equal(first.contract_version, "2.0.0");
+    assert.equal(first.contract_version, "2.1.0");
     assert.equal(first.harness.plugin_api, "v2");
     assert.equal(first.current_call.message_id, input.messageID);
     assert.equal(first.current_call.identity.model.model_id, "test-model");
@@ -259,34 +259,42 @@ test("registered V2 hooks hold each pre/post and persist bound context", async (
   }
 });
 
-test("human pre rejection latches later tool, semantic context, HTTP and WebSocket hooks", async () => {
+test("human pre rejection cancels only that call and later model/tool requests work", async () => {
   const f = await setup();
   try {
     const before = f.hooks["tool.execute.before"](structuredClone(input));
-    const rejected = assert.rejects(before, SessionBlockedError);
+    const rejected = assert.rejects(before, ActionRejectedError);
     await pending(f.ui, 1);
     f.ui.pending[0].resolve("reject");
     await rejected;
     for (const name of [
-      "tool.execute.before",
       "session.context",
       "session.model.request",
       "session.http.request",
       "session.experimental.ws.send",
     ])
-      await assert.rejects(
-        f.hooks[name]({
-          ...structuredClone(input),
-          id: "next",
-          ...modelContext(),
-          kind: "primary",
-          request: new Request("https://example.test/model"),
-          frame: "{}",
-        }),
-        SessionBlockedError,
-      );
-    assert.equal(f.ui.pending.length, 1);
-    assert.ok(f.interrupts.includes(input.sessionID));
+      await f.hooks[name]({
+        ...modelContext(),
+        kind: "primary",
+        request: new Request("https://example.test/model"),
+        frame: "{}",
+      });
+    const next = f.hooks["tool.execute.before"]({ ...structuredClone(input), id: "next" });
+    await pending(f.ui, 2);
+    f.ui.pending[1].resolve("allow");
+    await next;
+    assert.equal(f.interrupts.length, 0);
+    const decisions = (await readFile(join(f.directory, "decisions.jsonl"), "utf8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    assert.ok(decisions.every((entry) => entry.scope === "call"));
+    assert.equal(
+      decisions.filter(
+        (entry) => entry.source === "plugin.user_override" && entry.decision === "deny",
+      ).length,
+      1,
+    );
   } finally {
     await f.cleanup();
   }
@@ -318,19 +326,81 @@ test("post error is a separate checkpoint with non-enumerable Error details", as
   }
 });
 
-test("post rejection never releases the raw result and blocks following requests", async () => {
+test("post rejection removes all original result fields and permits continuation", async () => {
   const f = await setup();
   try {
-    let released = false;
-    const after = f.hooks["tool.execute.after"](post()).then(() => {
-      released = true;
-    });
-    const rejected = assert.rejects(after, SessionBlockedError);
+    const event = {
+      ...post(),
+      result: {
+        content: [{ type: "text", text: "SECRET_CONTENT" }],
+        output: { secret: "SECRET_OUTPUT" },
+        metadata: { secret: "SECRET_METADATA" },
+        extension: "SECRET_EXTENSION",
+      },
+    };
+    const after = f.hooks["tool.execute.after"](event);
     await pending(f.ui, 1);
     f.ui.pending[0].resolve("reject");
+    await after;
+    assert.deepEqual(Object.keys(event.result), ["content"]);
+    assert.match(String(event.result.content), /Результат этого вызова скрыт/);
+    assert.doesNotMatch(JSON.stringify(event.result), /SECRET/);
+    await f.hooks["session.context"](modelContext());
+    const next = f.hooks["tool.execute.before"]({ ...input, id: "after_rejected_post" });
+    await pending(f.ui, 2);
+    f.ui.pending[1].resolve("allow");
+    await next;
+    assert.equal(f.interrupts.length, 0);
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("post rejection replaces the entire native tool error", async () => {
+  const f = await setup();
+  try {
+    const event = {
+      ...structuredClone(input),
+      status: "error",
+      error: Object.assign(new Error("SECRET_MESSAGE"), {
+        _tag: "Tool.Error",
+        error: "SECRET_CAUSE",
+        metadata: { secret: "SECRET_METADATA" },
+      }),
+    };
+    const after = f.hooks["tool.execute.after"](event);
+    await pending(f.ui, 1);
+    f.ui.pending[0].resolve("reject");
+    await after;
+    assert.match(event.error.message, /Результат этого вызова скрыт/);
+    assert.doesNotMatch(JSON.stringify(event.error), /SECRET/);
+    assert.equal(event.error._tag, "Tool.Error");
+    assert.equal(f.interrupts.length, 0);
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("rejecting one parallel checkpoint does not reject sibling or child operations", async () => {
+  const f = await setup();
+  try {
+    f.hooks.event({
+      type: "session.created",
+      data: { sessionID: "ses_child", parentID: input.sessionID },
+    });
+    const first = f.hooks["tool.execute.before"](structuredClone(input));
+    const rejected = assert.rejects(first, ActionRejectedError);
+    const sibling = f.hooks["tool.execute.before"]({ ...input, id: "sibling" });
+    const child = f.hooks["tool.execute.before"]({ ...input, sessionID: "ses_child", id: "child" });
+    await pending(f.ui, 3);
+    const denied = f.ui.pending.find((p) => p.request.current_call.tool_call_id === input.id)!;
+    denied.resolve("reject");
     await rejected;
-    assert.equal(released, false);
-    await assert.rejects(f.hooks["session.context"](modelContext()), SessionBlockedError);
+    for (const item of f.ui.pending.filter((p) => p !== denied)) item.resolve("allow");
+    await Promise.all([sibling, child]);
+    await f.hooks["session.context"](modelContext());
+    await f.hooks["session.context"]({ ...modelContext(), sessionID: "ses_child" });
+    assert.equal(f.interrupts.length, 0);
   } finally {
     await f.cleanup();
   }
@@ -359,15 +429,15 @@ test("approval UI failure is fail closed, not a classifier outage", async () => 
   try {
     await assert.rejects(
       f.hooks["tool.execute.before"](structuredClone(input)),
-      SessionBlockedError,
+      ActionRejectedError,
     );
-    await assert.rejects(f.hooks["session.context"](modelContext()), SessionBlockedError);
+    await f.hooks["session.context"](modelContext());
   } finally {
     await f.cleanup();
   }
 });
 
-test("startup UI failure retains registered enforcement hooks", async () => {
+test("startup UI failure denies tool calls but permits text conversation", async () => {
   const ui = new UI();
   ui.start = async () => {
     throw new Error("Port unavailable");
@@ -378,9 +448,9 @@ test("startup UI failure retains registered enforcement hooks", async () => {
     assert.ok(f.registered.has("session.http.request"));
     await assert.rejects(
       f.registered.get("tool.execute.before")!(structuredClone(input)),
-      SessionBlockedError,
+      ActionRejectedError,
     );
-    await assert.rejects(f.registered.get("session.context")!(modelContext()), SessionBlockedError);
+    await f.registered.get("session.context")!(modelContext());
     assert.equal(ui.pending.length, 0);
   } finally {
     await f.cleanup();
@@ -397,7 +467,7 @@ test("audit startup failure and invalid options retain a blocking plugin", async
       try {
         await assert.rejects(
           f.registered.get("tool.execute.before")!(structuredClone(input)),
-          SessionBlockedError,
+          ActionRejectedError,
         );
         assert.equal(f.ui.pending.length, 0);
       } finally {
@@ -414,7 +484,7 @@ test("mutation while approval waits invalidates the one-time approval", async ()
   try {
     const event = structuredClone(input);
     const before = f.hooks["tool.execute.before"](event);
-    const rejected = assert.rejects(before, SessionBlockedError);
+    const rejected = assert.rejects(before, ActionRejectedError);
     await pending(f.ui, 1);
     event.input.path = "/workspace/changed";
     assert.equal(f.ui.pending[0].request.current_call.arguments.path, input.input.path);
@@ -425,21 +495,51 @@ test("mutation while approval waits invalidates the one-time approval", async ()
   }
 });
 
-test("native interruption cancels outstanding confirmation", async () => {
+test("post mutation after approval hides the changed output without blocking another action", async () => {
+  const f = await setup();
+  try {
+    const event = post();
+    const after = f.hooks["tool.execute.after"](event);
+    await pending(f.ui, 1);
+    event.result.content = [{ type: "text", text: "UNAPPROVED_CHANGE" }];
+    f.ui.pending[0].resolve("allow");
+    await after;
+    assert.doesNotMatch(JSON.stringify(event.result), /UNAPPROVED_CHANGE/);
+    assert.match(String(event.result.content), /Результат этого вызова скрыт/);
+    await f.hooks["session.context"](modelContext());
+    assert.equal(f.interrupts.length, 0);
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("native interruption cancels current confirmation without blocking the next turn", async () => {
   const f = await setup();
   try {
     const before = f.hooks["tool.execute.before"](structuredClone(input));
-    const rejected = assert.rejects(before, SessionBlockedError);
+    const rejected = assert.rejects(before, ActionRejectedError);
     await pending(f.ui, 1);
     f.emit({
       type: "session.execution.interrupted",
       data: { sessionID: "ses_test", reason: "user" },
     });
     await rejected;
-    await assert.rejects(
-      f.hooks["tool.execute.before"]({ ...input, id: "next" }),
-      SessionBlockedError,
+    const next = f.hooks["tool.execute.before"]({ ...input, messageID: "msg_next", id: "next" });
+    await pending(f.ui, 2);
+    f.ui.pending[1].resolve("allow");
+    await next;
+    const audit = await readFile(join(f.directory, "decisions.jsonl"), "utf8");
+    const decisions = audit
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    assert.equal(
+      decisions.filter(
+        (entry) => entry.source === "plugin.user_override" && entry.decision === "deny",
+      ).length,
+      0,
     );
+    assert.equal(f.interrupts.length, 0);
   } finally {
     await f.cleanup();
   }
@@ -464,7 +564,7 @@ test("cancellation during context collection cannot later open an approval", asy
   });
   try {
     const before = f.hooks["tool.execute.before"](structuredClone(input));
-    const rejected = assert.rejects(before, SessionBlockedError);
+    const rejected = assert.rejects(before, ActionRejectedError);
     await started;
     f.hooks.event({
       type: "session.execution.interrupted",
@@ -540,32 +640,30 @@ test("permission observer never weakens the harness deny policy", async () => {
   }
 });
 
-test("event stream failure cancels approvals and blocks future checkpoints", async () => {
+test("event stream failure cancels approvals but preserves text conversation", async () => {
   const f = await setup();
   try {
     const before = f.hooks["tool.execute.before"](structuredClone(input));
-    const rejected = assert.rejects(before, SessionBlockedError);
+    const rejected = assert.rejects(before, ActionRejectedError);
     await pending(f.ui, 1);
     f.emit(new Error("stream lost"));
     await rejected;
-    await assert.rejects(f.hooks["session.context"](modelContext()), SessionBlockedError);
+    await f.hooks["session.context"](modelContext());
   } finally {
     await f.cleanup();
   }
 });
 
-test("invalid Unicode arguments fail closed before constructing the correlation key", async () => {
+test("invalid arguments cancel only that action and do not latch the session", async () => {
   const f = await setup(allow);
   try {
     await assert.rejects(
       f.hooks["tool.execute.before"]({ ...input, input: { path: "\ud800" } }),
-      /Invalid Unicode/,
+      ActionRejectedError,
     );
-    await assert.rejects(
-      f.hooks["session.model.request"]({ ...modelContext(), kind: "primary", headers: {} }),
-      SessionBlockedError,
-    );
-    assert.ok(f.interrupts.includes(input.sessionID));
+    await f.hooks["session.model.request"]({ ...modelContext(), kind: "primary", headers: {} });
+    await f.hooks["tool.execute.before"]({ ...input, id: "valid_after_invalid" });
+    assert.equal(f.interrupts.length, 0);
   } finally {
     await f.cleanup();
   }
@@ -665,7 +763,7 @@ test("invalid enabled values never disable registered enforcement", async () => 
       assert.ok(f.registered.has("tool.execute.before"));
       await assert.rejects(
         f.hooks["tool.execute.before"](structuredClone(input)),
-        SessionBlockedError,
+        ActionRejectedError,
       );
       assert.equal(f.ui.pending.length, 0);
     } finally {
@@ -687,7 +785,7 @@ test("scalar, array and null options fail closed rather than bypassing setup", a
       assert.ok(f.registered.has("tool.execute.before"));
       await assert.rejects(
         hooks["tool.execute.before"](structuredClone(input)),
-        SessionBlockedError,
+        ActionRejectedError,
       );
       assert.equal(serviceStarts, 0);
       assert.equal(ui.pending.length, 0);

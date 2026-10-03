@@ -22,11 +22,17 @@ class TestElement {
   textContent = "";
   className = "";
   children: TestElement[] = [];
+  private readonly listeners = new Map<string, () => void>();
   constructor(readonly tag: string) {}
   append(...children: TestElement[]) {
     this.children.push(...children);
   }
-  addEventListener() {}
+  addEventListener(event: string, listener: () => void) {
+    this.listeners.set(event, listener);
+  }
+  click() {
+    this.listeners.get("click")?.();
+  }
   remove() {}
   set innerHTML(_value: string) {
     throw new Error("Untrusted HTML insertion is forbidden");
@@ -180,7 +186,8 @@ test("V2 error cards identify the failed operation and render hostile error text
     },
   ]);
   assert.match(loaded.container.text, /инструмент завершился с ошибкой/);
-  assert.match(loaded.container.text, /Разрешение передаст ошибку агенту/);
+  assert.match(loaded.container.text, /Ошибка удерживается и пока не передана агенту/);
+  assert.match(loaded.container.text, /Уже выполненное действие не отменяется/);
   assert.match(loaded.container.text, /повторного запуска не будет/);
   assert.match(loaded.container.text, /Предварительный просмотр ошибки/);
   assert.ok(loaded.container.text.includes(payload));
@@ -195,12 +202,56 @@ test("V2 error cards identify the failed operation and render hostile error text
 test("V2 pre and completed post cards describe their distinct execution checkpoints", async () => {
   for (const [phase, outcome, expected] of [
     ["pre_tool_call", null, "инструмент ещё не запущен"],
-    ["post_tool_call", "completed", "Разрешение передаст его результат агенту"],
+    ["post_tool_call", "completed", "Результат удерживается и пока не передан агенту"],
   ] as const) {
     const loaded = await loadPage(new URL("http://127.0.0.1:12345/#capability"), storage(), [
       { id: phase, tool: "bash", phase, outcome, result: "Completed native result" },
     ]);
     assert.ok(loaded.container.text.includes(expected));
     assert.ok(!loaded.container.text.includes("завершился с ошибкой"));
+  }
+});
+
+test("warning decisions apply to the reviewed operation with phase-specific action labels", async () => {
+  for (const [phase, outcome, allowLabel, rejectLabel] of [
+    ["pre_tool_call", null, "Продолжить", "Отменить действие"],
+    ["post_tool_call", "completed", "Передать результат", "Скрыть результат"],
+    ["post_tool_call", "error", "Передать ошибку", "Скрыть ошибку"],
+  ] as const) {
+    for (const [decision, label] of [
+      ["allow", allowLabel],
+      ["reject", rejectLabel],
+    ] as const) {
+      const item = {
+        id: "reviewed-operation",
+        tool: "bash",
+        phase,
+        outcome,
+        binding_digest: "a".repeat(64),
+        reason: "Potentially unsafe operation",
+      };
+      const loaded = await loadPage(new URL("http://127.0.0.1:12345/#capability"), storage(), [
+        item,
+      ]);
+      const card = loaded.container.children[0]!;
+      assert.match(card.text, /Предупреждение: классификатор отклонил эту операцию/);
+      assert.match(card.text, /Требуется ваше решение/);
+      assert.ok(!card.text.includes("Остановить сессию"));
+      assert.equal(card.className, "warning");
+      const button = card.children.find((node) => node.tag === "button" && node.text === label);
+      assert.ok(button, `Missing ${phase}/${outcome} button: ${label}`);
+      button.click();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      const submission = loaded.calls.find((call) => call.path === "/api/decision");
+      assert.ok(submission);
+      assert.equal(submission.options.method, "POST");
+      assert.equal(submission.options.headers.Authorization, "Bearer capability");
+      assert.deepEqual(JSON.parse(submission.options.body), {
+        id: item.id,
+        phase,
+        binding_digest: item.binding_digest,
+        decision,
+      });
+    }
   }
 });

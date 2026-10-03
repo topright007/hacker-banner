@@ -8,7 +8,7 @@
       "const": "opencode-plugin-classifier"
     },
     "contract_version": {
-      "const": "2.0.0"
+      "const": "2.1.0"
     },
     "request_id": {
       "type": "string"
@@ -595,7 +595,8 @@
               "$ref": "#/$defs/envelope"
             },
             "approval_decisions": {
-              "$ref": "#/$defs/envelope"
+              "$ref": "#/$defs/envelope",
+              "description": "Own classifier and user decisions since attachment have scope=call. Session and related-session identities provide context, not a permanent enforcement scope."
             },
             "permission_evaluations": {
               "$ref": "#/$defs/envelope"
@@ -624,7 +625,8 @@
                 "scope_session_ids",
                 "reason"
               ],
-              "additionalProperties": false
+              "additionalProperties": false,
+              "description": "Current checkpoint wait state. scope_session_ids contains only the current call session. This compatibility field does not represent a persistent session/tree lock."
             }
           },
           "required": [
@@ -828,10 +830,10 @@
           "const": "allow_once_for_bound_checkpoint"
         },
         "user_reject": {
-          "const": "block_session_tree_and_request_abort"
+          "const": "reject_tool_call_or_withhold_result"
         },
         "user_no_response": {
-          "const": "keep_blocked"
+          "const": "keep_checkpoint_pending"
         },
         "classifier_timeout_ms": {
           "type": "integer",
@@ -847,7 +849,7 @@
         "classifier_timeout_ms"
       ],
       "additionalProperties": false,
-      "description": "Policy chosen for MVP. Classifier transport timeout/unavailable is fail-open and audited. Human waiting/rejection is not classifier unavailability. Post override releases this result, not permission to undo/re-run the tool. Native OpenCode restrictions still apply."
+      "description": "Policy chosen for MVP. Classifier transport timeout/unavailable is fail-open and audited. A bound human rejection cancels only this pre-tool call or withholds the entire post-tool result/error using a safe placeholder. Waiting keeps this checkpoint pending. Neither installs a permanent session/tree lock. Post decisions do not undo or re-run the tool. Native OpenCode restrictions still apply."
     },
     "binding": {
       "type": "object",

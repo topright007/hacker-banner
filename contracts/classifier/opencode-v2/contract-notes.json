@@ -1,6 +1,6 @@
 {
   "contract": "opencode-plugin-classifier",
-  "contract_version": "2.0.0",
+  "contract_version": "2.1.0",
   "opencode_version": "2.0.22",
   "package": "@opencode/plugin@2.0.22",
   "plugin_api": "v2",
@@ -41,5 +41,13 @@
     "Deduplication and retaining only the latest full hook snapshots avoid repeatedly retaining full historical model contexts. Journals and unique message data still grow without automatic rotation."
   ],
   "examples": "examples/*.illustrative.json are synthetic mocked-Context examples validated with the same schema and binding code, not recordings from a real session.",
-  "validation": "collector tests cover native schema-spoof input, API failures, credentials, compaction retention, Effect/MCP schemas, successful/error post outcomes, transport body ownership and Code Mode ID reuse."
+  "validation": "collector tests cover native schema-spoof input, API failures, credentials, compaction retention, Effect/MCP schemas, successful/error post outcomes, transport body ownership and Code Mode ID reuse.",
+  "enforcement": [
+    "A classifier deny opens a red warning in the local browser panel and holds only the bound checkpoint until the user decides. No response leaves that checkpoint pending; it is not classifier unavailability.",
+    "A pre-tool rejection returns a typed Tool.Error before execution. The model can continue the conversation and choose a different action. Rejection does not latch a session or related session tree.",
+    "A post-tool rejection replaces the complete Tool.Result or Tool.Error with a safe placeholder before model release, including content, structured output, metadata and extension fields. Already completed side effects are not undone; the tool is not re-run.",
+    "Own classifier/user audit decisions use scope=call. Related session context is evidence only and does not broaden the user decision to other operations.",
+    "Classifier timeout, unavailable service and invalid classifier responses remain fail-open under native harness permissions. Startup and internal sensor failures cancel affected tool operations; ordinary text model conversation remains available.",
+    "The explicit options.enabled=false setting disables the sensor only after the OpenCode process or service restarts."
+  ]
 }

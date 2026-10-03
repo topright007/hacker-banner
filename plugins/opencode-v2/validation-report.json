@@ -1,15 +1,17 @@
 {
-  "generated_at": "2026-10-03T09:49:45.071699+00:00",
+  "generated_at": "2026-10-03T10:07:26.319856+00:00",
+  "plugin_version": "0.1.2",
   "harness": "OpenCode 2.0.22",
   "plugin_api": "@opencode/plugin@2.0.22",
-  "contract_version": "2.0.0",
+  "contract_version": "2.1.0",
   "unit_component": {
-    "passed": 48,
+    "passed": 55,
     "failed": 0,
     "groups": {
       "collector": 7,
-      "sensor": 21,
-      "approval_ui": 20
+      "sensor": 24,
+      "approval_ui": 21,
+      "runtime_bridge": 3
     }
   },
   "typecheck": "passed",
@@ -22,40 +24,50 @@
     "model": "local deterministic OpenAI-compatible fixture; no real external LLM",
     "scenarios": [
       "shell: allow pre and post",
-      "shell: reject pre blocks side effect",
-      "shell: reject post blocks result forwarding and next tool",
-      "MCP with codemode=false: allow pre and post, catalog description/schema observed",
-      "MCP with codemode=false: reject post blocks model result",
-      "Tool.Error: allow pre and post forwards error",
-      "Tool.Error: reject post blocks forwarding",
-      "startup: state directory is a regular file, registered hooks block model/tool execution",
-      "enabled protection: text-only model reply completes without tool checkpoints",
-      "enabled=false: tool executes and result reaches model, no sensor state/UI created"
+      "shell: reject pre prevents side effect, next independent call and same-session user turn complete",
+      "shell: reject post masks full result, next independent call and same-session user turn complete",
+      "MCP with codemode=false: allow pre/post, description/schema observed",
+      "MCP with codemode=false: reject post masks result; same-session continuation works",
+      "Tool.Error: allow pre/post forwards error",
+      "Tool.Error: reject post masks error; same-session continuation works",
+      "startup: invalid state directory denies tools but model conversation completes",
+      "enabled: text-only response completes without tool checkpoints",
+      "disabled: model/tool complete with no sensor state or UI"
     ]
   },
   "packaged_live_smoke": {
     "status": "passed",
-    "passed": 2,
+    "passed": 4,
     "failed": 0,
-    "scenarios": ["text-only enabled", "disabled model and tools"],
+    "scenarios": [
+      "shell/reject-pre",
+      "shell/reject-post",
+      "mcp/reject-post",
+      "read-error/reject-post"
+    ],
     "installation": "Fresh extracted ZIP without plugin node_modules",
-    "sha256_checksums": "all matched"
+    "sha256_checksums": "all matched",
+    "continuation": "Every rejection case verifies another independently approved tool and a new user turn in the same session, with the same running server/plugin and approval control identity."
   },
   "review": {
-    "status": "completed; no unresolved findings in enabled flag, defaults, invalid options and documentation",
-    "fixed_findings": [
-      "Invalid Unicode before correlation-key creation now latches session tree",
-      "Overlapping identical CodeMode calls keep ambiguous pre timestamps null until all finish",
-      "Pinned v2.0.22 local directory loading needs root index entry; release includes it"
+    "status": "completed; no unresolved findings in per-action rejection, post redaction and cancellation races",
+    "verified": [
+      "Pre refusal uses recoverable typed Tool.Error through the pinned Effect API",
+      "Rejection affects only the current bound checkpoint; parallel and parent/child checkpoints remain independent",
+      "Post refusal replaces the complete result/error including structured output and metadata",
+      "Native cancellation invalidates in-flight checks without preventing subsequent turns",
+      "Approval cancellation during server startup cannot leave an orphan request",
+      "No change to V1 plugin"
     ]
   },
   "limits": [
-    "Unit/component tests cover CodeMode nesting, child lineage and cancellation; live MCP uses direct tools with codemode=false.",
-    "No OS isolation, provider-hosted tool enforcement, full persisted session export, or rollback after post.",
-    "Classifier remains an always-deny stub. Classifier unavailability is intentionally fail-open.",
-    "Already-running parallel tools may finish. Latches and observed history are not restored across plugin restarts.",
-    "Self-load failures before critical hook registration cannot be blocked by this plugin."
+    "Classifier remains an always-deny stub; unavailability intentionally fails open.",
+    "No rollback after post, OS sandbox, or provider-hosted tool enforcement.",
+    "Live MCP uses direct tools with codemode=false; unit tests cover CodeMode IDs and parallel/child calls.",
+    "Pre refusals may have no post hook because the tool did not execute.",
+    "Already-running parallel tools may finish; each intercepted checkpoint requires its own decision.",
+    "An independently installed legacy V1 adapter can still latch sessions; remove it from discovery when upgrading.",
+    "Self-load failures before hook registration cannot be enforced by the plugin."
   ],
-  "tested_bundle_sha256": "f594a4fbca3db4b82d8d1248196e819fb8c1833636bf76382f72b01e7edf464c",
-  "plugin_version": "0.1.1"
+  "tested_bundle_sha256": "3ad1e441599ef3bacc5c7235b1dcace4e68aa13133cbe9678acd81cbf33930e7"
 }

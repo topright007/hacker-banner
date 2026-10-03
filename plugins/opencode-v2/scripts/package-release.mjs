@@ -64,7 +64,7 @@ await writeFile(
       package: pkg.name,
       version: pkg.version,
       harness: "OpenCode 2.0.22",
-      classifier_contract: "2.0.0",
+      classifier_contract: "2.1.0",
       classifier: "local always-deny stub; no network classifier configured",
       source_commit: commit.status === 0 ? commit.stdout.trim() : null,
       source_dirty: changes.status === 0 ? changes.stdout.trim().length > 0 : null,

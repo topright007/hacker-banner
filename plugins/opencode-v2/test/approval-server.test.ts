@@ -319,8 +319,8 @@ test("V2 preview includes content and structured output instead of choosing only
   ).json();
   assert.deepEqual(fullRequest.current_call.result.native, native);
   const html = await (await fetch(`${f.url.origin}/`)).text();
-  assert.ok(html.includes("Подтверждение операций OpenCode V2"));
-  assert.ok(html.includes("Классификатор отклонил операцию"));
+  assert.ok(html.includes("Предупреждения безопасности OpenCode V2"));
+  assert.ok(html.includes("классификатор отклонил эту операцию"));
   assert.ok(html.includes("Скачать полный запрос JSON"));
   assert.ok(html.includes("Предварительный просмотр результата"));
   assert.ok(!html.includes("считает операцию небезопасной"));
@@ -447,18 +447,15 @@ test("V2 execute.after errors have an error preview and an immutable bound error
   assert.equal(f.server.pendingCount, 0);
 });
 
-test("cancelSession before ask prevents registration without blocking a different session", async (t) => {
+test("cancelSession only cancels existing waits; new calls in the same session remain reviewable", async (t) => {
   const f = await fixture(t);
   f.server.cancelSession(["session-a"]);
-  const a = checkpoint("cancel-before-ask");
-  assert.equal(await f.server.ask(a.request, a.response), "reject");
-  assert.equal(f.server.pendingCount, 0);
-  const b = checkpoint("unaffected-session", "session-b");
-  const answerB = f.server.ask(b.request, b.response);
+  const a = checkpoint("after-cancellation");
+  const answer = f.server.ask(a.request, a.response);
   const [item] = await pendingCount(f, 1);
-  assert.equal(item.session_id, "session-b");
+  assert.equal(item.session_id, "session-a");
   assert.equal((await f.decide(item, "allow")).status, 200);
-  assert.equal(await answerB, "allow");
+  assert.equal(await answer, "allow");
 });
 
 test("cancelSession during initial server start cannot leave an orphan approval", async (t) => {

@@ -191,14 +191,14 @@ function fixture() {
     hookOutput: { path: "/project/a" },
     preObservedAt: 10,
     observedAt: 10,
-    gate: { state: "awaiting_classifier", scope_session_ids: ["root", "child"], reason: null },
+    gate: { state: "awaiting_classifier", scope_session_ids: ["child"], reason: null },
   };
   return { collector, ctx, messages, info, pre, calls };
 }
 function bind(input: any, data: any) {
   return bindRequest({
     contract: "opencode-plugin-classifier",
-    contract_version: "2.0.0",
+    contract_version: "2.1.0",
     request_id: "request",
     phase: input.phase,
     harness: { name: "opencode", version: "2.0.22", plugin_api: "v2" },
@@ -231,8 +231,8 @@ function bind(input: any, data: any) {
       classifier_unavailable: "allow_with_harness_permissions",
       classifier_deny: "ask_user",
       user_allow: "allow_once_for_bound_checkpoint",
-      user_reject: "block_session_tree_and_request_abort",
-      user_no_response: "keep_blocked",
+      user_reject: "reject_tool_call_or_withhold_result",
+      user_no_response: "keep_checkpoint_pending",
       classifier_timeout_ms: 1000,
     },
   });

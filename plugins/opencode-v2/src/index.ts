@@ -1,4 +1,5 @@
 import { Plugin } from "@opencode/plugin";
+import { withActionRejection } from "./runtime.js";
 import { createSensor } from "./sensor.js";
 
 const SensorPlugin = Plugin.define({
@@ -9,4 +10,4 @@ const SensorPlugin = Plugin.define({
   },
 });
 
-export default SensorPlugin;
+export default withActionRejection(SensorPlugin);

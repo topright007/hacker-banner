@@ -7,7 +7,8 @@ import { ApprovalServer } from "./approval-server.js";
 import { AuditLog } from "./audit.js";
 import { denyAllClassifier, type Classifier } from "./classifier.js";
 import { ContextCollector } from "./collector.js";
-import { SessionBlockedError, SessionGates } from "./gates.js";
+import { ActionRejectedError } from "./gates.js";
+import { Error as ToolError } from "@opencode/plugin/promise/tool";
 import {
   assertResponse,
   bindRequest,
@@ -117,15 +118,15 @@ export async function createSensor(
       ? resolve(options.stateDirectory)
       : join(homedir(), ".local", "state", "opencode-sensor-v2", workspaceHash, instanceID);
   const collector = new ContextCollector({ ctx, apiTimeoutMs });
-  const gates = new SessionGates(collector.knownParents);
   const audit = new AuditLog(stateDirectory);
   const classifier = dependencies.classifier ?? denyAllClassifier;
   let sequence = 0;
   let closed = false;
-  const preCalls = new Map<string, { token: symbol; observedAt: number }[]>();
+  type Invocation = { token: symbol; observedAt: number; sessionID: string; cancelled: boolean };
+  const preCalls = new Map<string, Invocation[]>();
   const ambiguousPreCalls = new Set<string>();
-  const active = new Map<symbol, string>();
-  const executingCheckpoints = new Map<symbol, string>();
+  const active = new Map<symbol, Invocation>();
+  const executingCheckpoints = new Map<symbol, { sessionID: string; cancelled: boolean }>();
   const registrations: { dispose(): Promise<void> }[] = [];
   const eventController = new AbortController();
   let eventTask: Promise<void> | undefined;
@@ -142,11 +143,12 @@ export async function createSensor(
   function notify(message: string, variant = "warning"): void {
     void notice(message, variant).catch(() => undefined);
   }
-  async function ready(sessionID?: string): Promise<void> {
+  async function ready(): Promise<void> {
     if (!startupResolved) await startup;
     if (closed || startupFailure) {
-      if (sessionID) stop(sessionID);
-      throw new SessionBlockedError();
+      throw new ActionRejectedError(
+        "Sensor: проверка этого действия недоступна. Действие отменено; сессия доступна для дальнейших сообщений.",
+      );
     }
   }
 
@@ -158,35 +160,13 @@ export async function createSensor(
       onNotice: (message) => notice(message),
     });
 
-  function relatedSessions(sessionID: string): string[] {
-    return [
-      ...new Set([
-        sessionID,
-        ...collector.relevantSessionIds(sessionID),
-        ...active.values(),
-        ...executingCheckpoints.values(),
-      ]),
-    ].filter((id) => gates.related(id, sessionID));
-  }
-
-  function stop(sessionID: string): void {
-    const alreadyBlocked = gates.isBlocked(sessionID);
-    gates.block(sessionID);
-    const sessions = relatedSessions(sessionID);
-    approvals.cancelSession(sessions);
-    if (alreadyBlocked) return;
-    // Awaiting abort from inside the hook can deadlock with harness waiting for
-    // the same hook to unwind. The latch is synchronous; abort is best effort.
-    for (const session of sessions) {
-      void Promise.resolve()
-        .then(() =>
-          ctx.session.interrupt(
-            { sessionID: session as any, resume: false },
-            { signal: AbortSignal.timeout(apiTimeoutMs) },
-          ),
-        )
-        .catch(() => undefined);
-    }
+  function cancelCurrentCheckpoints(sessionID: string): void {
+    // Invalidate only work already in flight. A later call in this same session
+    // gets a fresh checkpoint and its own approval, without an unblock/reset.
+    for (const checkpoint of executingCheckpoints.values())
+      if (checkpoint.sessionID === sessionID) checkpoint.cancelled = true;
+    for (const call of active.values()) if (call.sessionID === sessionID) call.cancelled = true;
+    approvals.cancelSession([sessionID]);
   }
 
   async function record(
@@ -206,7 +186,7 @@ export async function createSensor(
       phase: request.phase,
       decision,
       reason,
-      scope: source === "plugin.user_override" && decision === "deny" ? "session_tree" : "call",
+      scope: "call",
       binding_digest: request.decision_binding.digest,
       decided_at_ms: Date.now(),
       native: null,
@@ -254,48 +234,52 @@ export async function createSensor(
   }
 
   async function checkpoint(phase: Phase, hookInput: Native): Promise<void> {
-    // Detach mutable native hook evidence before any SDK or approval awaits.
     const observedAt = Date.now();
     const sessionID = hookInput.sessionID as string;
-    let originalInput: Native;
-    let originalOutput: Native | null;
-    let inputDigest: string;
+    const checkpointToken = Symbol();
+    const pending = { sessionID, cancelled: false };
+    executingCheckpoints.set(checkpointToken, pending);
+    let key: string | undefined;
+    let call: Invocation | undefined;
+    let released = false;
+    const ensureCurrent = () => {
+      if (closed || startupFailure || pending.cancelled || call?.cancelled)
+        throw new ActionRejectedError(
+          "Sensor: проверка этого действия отменена. Для нового действия потребуется новое подтверждение.",
+        );
+    };
     try {
-      originalInput = snapshotToolEvent(hookInput);
-      originalOutput = jsonCopy(toolOutput(phase, originalInput));
-      inputDigest = digest(originalInput.input ?? null);
-    } catch (error) {
-      stop(sessionID);
-      throw error;
-    }
-    // CodeMode reuses its outer call ID for nested tools. Retain every observed
-    // invocation; do not invent an exact pairing for concurrent identical calls.
-    const key = `${sessionID}\u0000${originalInput.messageID}\u0000${originalInput.id}\u0000${originalInput.tool}\u0000${inputDigest}`;
-    const calls = preCalls.get(key) ?? [];
-    const call = phase === "pre_tool_call" ? { token: Symbol(key), observedAt } : calls[0];
-    const preObservedAt =
-      phase === "pre_tool_call"
-        ? observedAt
-        : calls.length === 1 && !ambiguousPreCalls.has(key)
-          ? calls[0].observedAt
-          : null;
-    if (phase === "pre_tool_call") {
-      if (calls.length > 0) ambiguousPreCalls.add(key);
-      calls.push(call!);
-      preCalls.set(key, calls);
-      active.set(call!.token, sessionID);
-    } else if (call) {
-      calls.shift();
-      if (!calls.length) {
-        preCalls.delete(key);
-        ambiguousPreCalls.delete(key);
+      // Detach before any SDK or approval await; bindings never follow mutations.
+      const originalInput = snapshotToolEvent(hookInput);
+      const originalOutput = jsonCopy(toolOutput(phase, originalInput));
+      const inputDigest = digest(originalInput.input ?? null);
+      // CodeMode reuses outer IDs. Keep every invocation, and report ambiguity.
+      key = `${sessionID}\u0000${originalInput.messageID}\u0000${originalInput.id}\u0000${originalInput.tool}\u0000${inputDigest}`;
+      const calls = preCalls.get(key) ?? [];
+      call =
+        phase === "pre_tool_call"
+          ? { token: Symbol(key), observedAt, sessionID, cancelled: false }
+          : calls[0];
+      const preObservedAt =
+        phase === "pre_tool_call"
+          ? observedAt
+          : calls.length === 1 && !ambiguousPreCalls.has(key)
+            ? calls[0].observedAt
+            : null;
+      if (phase === "pre_tool_call") {
+        if (calls.length > 0) ambiguousPreCalls.add(key);
+        calls.push(call!);
+        preCalls.set(key, calls);
+        active.set(call!.token, call!);
+      } else if (call) {
+        calls.shift();
+        if (!calls.length) {
+          preCalls.delete(key);
+          ambiguousPreCalls.delete(key);
+        }
       }
-    }
-    const checkpointToken = Symbol(key);
-    executingCheckpoints.set(checkpointToken, sessionID);
-    try {
-      await ready(sessionID);
-      await gates.wait(sessionID);
+      await ready();
+      ensureCurrent();
       const collected = await collector.collect({
         phase,
         hookInput: originalInput,
@@ -304,16 +288,14 @@ export async function createSensor(
         observedAt,
         gate: {
           state: "awaiting_classifier",
-          scope_session_ids: relatedSessions(sessionID),
+          scope_session_ids: [sessionID],
           reason: null,
         },
       });
-      // Parent discovery can reveal a tree that was already rejected while the
-      // SDK requests were in flight. Never downgrade that latch to fail-open.
-      await gates.wait(sessionID);
+      ensureCurrent();
       const request = bindRequest({
         contract: "opencode-plugin-classifier",
-        contract_version: "2.0.0",
+        contract_version: "2.1.0",
         request_id: id("req"),
         phase,
         harness: { name: "opencode", version: ctx.app.version, plugin_api: "v2" },
@@ -333,7 +315,7 @@ export async function createSensor(
             "Semantic context and wire hooks are separate observations; exact request correlation is not provided by the V2 API.",
             "Later plugins may mutate the checked output. Run this sensor last and restrict other plugins.",
             "Active session context and events observed since attachment are available; compacted-away archive is not exposed by Plugin Context.",
-            "Post hooks cover completed calls and Tool.Error failures, not every cancellation or runtime defect.",
+            "Post hooks cover executed calls and their Tool.Error outcomes; pre-hook rejection, cancellation and runtime defects may have no post checkpoint.",
             "Provider-hosted tools and shell operations outside local tool execution are outside this checkpoint boundary.",
             "CodeMode nested tools reuse the outer call ID; concurrent identical calls have no unique native pairing key.",
           ],
@@ -352,8 +334,8 @@ export async function createSensor(
           classifier_unavailable: "allow_with_harness_permissions",
           classifier_deny: "ask_user",
           user_allow: "allow_once_for_bound_checkpoint",
-          user_reject: "block_session_tree_and_request_abort",
-          user_no_response: "keep_blocked",
+          user_reject: "reject_tool_call_or_withhold_result",
+          user_no_response: "keep_checkpoint_pending",
           classifier_timeout_ms: classifierTimeoutMs,
         },
       });
@@ -365,7 +347,9 @@ export async function createSensor(
           "error",
         );
       }
+      ensureCurrent();
       const response = await classify(request);
+      ensureCurrent();
       if (response.status === "unavailable") {
         await record(
           request,
@@ -377,27 +361,27 @@ export async function createSensor(
           "Классификатор недоступен: применён fail-open. Штатные разрешения OpenCode продолжают действовать.",
         );
       } else {
-        if (response.decision === "deny") gates.hold(sessionID, request.request_id);
         await record(request, "plugin.classifier", response.decision!, response.reason);
+        ensureCurrent();
         if (response.decision === "deny") {
           let decision: "allow" | "reject";
           try {
             decision = await approvals.ask(request, response);
           } catch {
             // A UI failure is not a classifier outage and must never auto-allow.
-            stop(sessionID);
-            notify("Подтверждение пользователя недоступно. Выполнение остановлено.", "error");
-            throw new SessionBlockedError();
+            throw new ActionRejectedError(
+              "Sensor: подтверждение недоступно. Это действие отменено; сессия остаётся доступной.",
+            );
           }
+          ensureCurrent();
           if (decision === "reject") {
-            stop(sessionID);
             await record(
               request,
               "plugin.user_override",
               "deny",
-              "Пользователь отказал или подтверждение отменено.",
+              "Пользователь отклонил этот checkpoint.",
             );
-            throw new SessionBlockedError();
+            throw new ActionRejectedError();
           }
           await record(
             request,
@@ -405,83 +389,92 @@ export async function createSensor(
             "allow",
             "Пользователь разрешил только этот checkpoint.",
           );
-          gates.release(request.request_id);
         }
       }
-      await gates.wait(sessionID);
+      ensureCurrent();
       // Never release an approval for a different mutable value than displayed.
       const liveOutput = jsonCopy(toolOutput(phase, hookInput));
       if (
         digest(originalInput) !== digest(snapshotToolEvent(hookInput)) ||
         digest(originalOutput) !== digest(liveOutput)
       ) {
-        stop(sessionID);
-        notify(
-          "Аргументы или результат изменились во время подтверждения. Выполнение остановлено; разрешение устарело.",
-          "error",
+        throw new ActionRejectedError(
+          "Sensor: аргументы или результат изменились во время подтверждения. Это действие отменено; разрешение устарело.",
         );
-        throw new SessionBlockedError();
       }
+      released = true;
     } catch (error) {
-      if (!(error instanceof SessionBlockedError)) {
-        // A programming/collection/contract failure must not impersonate a
-        // classifier outage. The always-deny MVP must remain reviewable.
-        stop(sessionID);
-        notify(
-          "Ошибка сбора или проверки контракта сенсора. Выполнение остановлено; подробности в логах OpenCode.",
-          "error",
-        );
-        notify(error instanceof Error ? error.message : "Sensor checkpoint failed", "error");
-      }
-      throw error;
+      if (error instanceof ActionRejectedError) throw error;
+      notify(
+        "Ошибка сбора или проверки контракта сенсора. Отменено только текущее действие.",
+        "error",
+      );
+      notify(error instanceof Error ? error.message : "Sensor checkpoint failed", "error");
+      throw new ActionRejectedError(
+        "Sensor: проверка этого действия завершилась ошибкой. Действие отменено; сессия остаётся доступной.",
+      );
     } finally {
       executingCheckpoints.delete(checkpointToken);
-      if (phase === "post_tool_call" || gates.isBlocked(sessionID)) {
+      if (phase === "post_tool_call" || !released) {
         if (call) active.delete(call.token);
-        if (gates.isBlocked(sessionID)) {
-          preCalls.delete(key);
-          ambiguousPreCalls.delete(key);
+        if (key && phase === "pre_tool_call") {
+          const remaining = (preCalls.get(key) ?? []).filter((item) => item !== call);
+          if (remaining.length) preCalls.set(key, remaining);
+          else {
+            preCalls.delete(key);
+            ambiguousPreCalls.delete(key);
+          }
         }
       }
     }
   }
 
+  async function after(event: Native): Promise<void> {
+    try {
+      await checkpoint("post_tool_call", event);
+    } catch (error) {
+      // V2's after hook supports mutable results/errors, not typed failures.
+      // Replace the entire value, including structured output and attachments.
+      const message =
+        "[OpenCode Sensor] Результат этого вызова скрыт: передача не разрешена. Не повторяйте действие без нового разрешения пользователя. Уже выполненные действия не отменены.";
+      if (event.status === "error") event.error = new ToolError({ message });
+      else event.result = { content: message };
+      notify(error instanceof Error ? error.message : "Передача результата отменена.");
+    }
+  }
+
   const hooks: Record<string, any> = {
     "tool.execute.before": (event: Native) => checkpoint("pre_tool_call", event),
-    "tool.execute.after": (event: Native) => checkpoint("post_tool_call", event),
+    "tool.execute.after": after,
     event: (event: Native) => {
       collector.observeEvent(event);
       const sessionID = eventSession(event);
       if (!sessionID) return;
       // V2 emits the terminal execution event after its fiber is cancelled.
-      // Hook promises have no AbortSignal, so cancel the pending UI explicitly.
-      // A child finishing normally must not cancel a parent's subagent call.
-      const unsettled = [...executingCheckpoints.values()].includes(sessionID);
+      // A harness cancellation invalidates current waits, not future user turns.
       if (
-        ["session.deleted", "session.execution.interrupted", "session.execution.failed"].includes(
-          event.type,
-        ) &&
-        (unsettled || [...active.values()].includes(sessionID))
-      )
-        stop(sessionID);
-      if (event.type === "session.execution.succeeded" && unsettled) stop(sessionID);
-      if (
-        event.type.startsWith("session.execution.") &&
-        event.type !== "session.execution.started"
+        [
+          "session.deleted",
+          "session.execution.interrupted",
+          "session.execution.failed",
+          "session.execution.succeeded",
+        ].includes(event.type)
       ) {
-        for (const [token, activeSession] of active)
-          if (activeSession === sessionID) active.delete(token);
-        for (const key of preCalls.keys())
-          if (key.startsWith(`${sessionID}\u0000`)) {
-            preCalls.delete(key);
-            ambiguousPreCalls.delete(key);
-          }
+        cancelCurrentCheckpoints(sessionID);
+        for (const [token, call] of active) if (call.sessionID === sessionID) active.delete(token);
+        // Retain cancelled pre entries until a late post can be recognized.
+        if (event.type === "session.execution.succeeded" || event.type === "session.deleted") {
+          for (const key of preCalls.keys())
+            if (key.startsWith(`${sessionID}\u0000`)) {
+              preCalls.delete(key);
+              ambiguousPreCalls.delete(key);
+            }
+        }
       }
     },
     dispose: async () => {
       if (closed) return;
       closed = true;
-      gates.close();
       eventController.abort();
       await approvals.close();
       await Promise.allSettled(registrations.map((registration) => registration.dispose()));
@@ -505,25 +498,27 @@ export async function createSensor(
   ] as const;
   for (const name of sessionHooks) {
     hooks[`session.${name}`] = async (event: Native) => {
+      // These hooks observe context. Only a concrete tool checkpoint can refuse
+      // work; a prior refusal must never block the user's next model request.
+      if (closed || startupFailure) return;
       try {
-        await ready(event.sessionID);
-        // Observe before waiting so parallel/auxiliary calls retain their own evidence.
         await collector.observeHook(`session.${name}`, event);
-        await gates.wait(event.sessionID);
-      } catch (error) {
-        stop(event.sessionID);
-        throw error;
+      } catch {
+        notify("Не удалось записать наблюдение контекста модели.", "error");
       }
     };
   }
   hooks["permission.evaluate"] = async (event: Native) => {
-    await ready(event.sessionID);
-    await collector.observeHook("permission.evaluate", event);
-    await gates.wait(event.sessionID);
-    // Do not weaken the configured harness policy; it still runs independently.
+    if (closed || startupFailure) return;
+    try {
+      await collector.observeHook("permission.evaluate", event);
+    } catch {
+      notify("Не удалось записать наблюдение разрешения.", "error");
+    }
+    // Never weaken the configured harness permission policy.
   };
   hooks["shell.create.before"] = async (event: Native) => {
-    await ready();
+    if (closed || startupFailure) return;
     // This hook has no session identity. Never guess one from concurrent activity.
     await collector.observeHook("shell.create.before", event);
   };
@@ -554,15 +549,20 @@ export async function createSensor(
         if (closed || eventController.signal.aborted) return;
         startupFailure = error;
         // Loss of cancellation observation must not leave a stale approval alive.
-        for (const sessionID of new Set([...active.values(), ...executingCheckpoints.values()]))
-          stop(sessionID);
-        notify("Поток событий OpenCode недоступен. Сенсор остановил выполнение.", "error");
+        for (const sessionID of new Set(
+          [...active.values(), ...executingCheckpoints.values()].map((item) => item.sessionID),
+        ))
+          cancelCurrentCheckpoints(sessionID);
+        notify(
+          "Поток событий OpenCode недоступен. Сенсор отклоняет действия; текстовые сообщения доступны.",
+          "error",
+        );
       }
     })();
   } catch (error) {
     startupFailure = error;
     notify(
-      `Сенсор не запустился; зарегистрированные hooks блокируют выполнение: ${
+      `Сенсор не запустился; инструменты недоступны, текстовые сообщения доступны: ${
         error instanceof Error ? error.message : "startup failure"
       }`,
       "error",
