@@ -52,7 +52,12 @@ function fixture() {
 test("Promise pre refusal becomes a recoverable Tool.Error and a later call still runs", async () => {
   const f = fixture();
   let cleaned = false;
-  const denied = new ActionRejectedError();
+  const denied = new ActionRejectedError({
+    phase: "pre_tool_call",
+    tool: "read",
+    cause: "user_rejected",
+    classifierReason: "Test classifier refusal",
+  });
   const plugin = withActionRejection(
     Plugin.define({
       id: "bridge-test",
@@ -89,7 +94,11 @@ test("Promise pre refusal becomes a recoverable Tool.Error and a later call stil
 test("unexpected pre failures and post failures remain defects", async () => {
   const f = fixture();
   const bug = new Error("unexpected plugin failure");
-  const postRefusal = new ActionRejectedError();
+  const postRefusal = new ActionRejectedError({
+    phase: "post_tool_call",
+    tool: "read",
+    cause: "internal_failure",
+  });
   const plugin = withActionRejection(
     Plugin.define({
       id: "bridge-defect-test",

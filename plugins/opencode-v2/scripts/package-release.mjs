@@ -42,7 +42,7 @@ await writeFile(
       plugins: [
         {
           package: `/ABSOLUTE/PATH/opencode-sensor-v2-${pkg.version}`,
-          options: { enabled: true, openBrowser: true },
+          options: { enabled: true },
         },
       ],
     },
@@ -66,6 +66,7 @@ await writeFile(
       harness: "OpenCode 2.0.22",
       classifier_contract: "2.1.0",
       classifier: "local always-deny stub; no network classifier configured",
+      approval_ui: "native OpenCode session forms; no browser or separate approval server",
       source_commit: commit.status === 0 ? commit.stdout.trim() : null,
       source_dirty: changes.status === 0 ? changes.stdout.trim().length > 0 : null,
       bundle_sha256: createHash("sha256").update(bundle).digest("hex"),

@@ -1,63 +1,58 @@
 {
-  "generated_at": "2026-10-03T10:07:26.319856+00:00",
-  "plugin_version": "0.1.2",
-  "harness": "OpenCode 2.0.22",
-  "plugin_api": "@opencode/plugin@2.0.22",
+  "plugin_version": "0.2.0",
   "contract_version": "2.1.0",
-  "unit_component": {
-    "passed": 55,
+  "opencode_version": "2.0.22",
+  "node_version": "24.19.0",
+  "platform": "darwin arm64",
+  "validated_at": "2026-10-03T10:53:54.505Z",
+  "change": "Native OpenCode session form approvals in Desktop and interactive TUI; no browser or separate approval server.",
+  "build": "passed",
+  "typecheck": "passed",
+  "format_check": "passed",
+  "unit_and_component_tests": {
+    "passed": 72,
     "failed": 0,
     "groups": {
+      "sensor": 27,
       "collector": 7,
-      "sensor": 24,
-      "approval_ui": 21,
-      "runtime_bridge": 3
+      "native_forms": 21,
+      "native_client": 11,
+      "runtime_bridge": 3,
+      "quarantine_messages": 3
     }
   },
-  "typecheck": "passed",
-  "build": "passed",
-  "format": "passed",
-  "live_smoke": {
-    "passed": 10,
+  "packaged_live_tests": {
+    "status": "passed",
+    "passed": 5,
     "failed": 0,
-    "runtime": "actual pinned @opencode/cli@2.0.22",
-    "model": "local deterministic OpenAI-compatible fixture; no real external LLM",
     "scenarios": [
-      "shell: allow pre and post",
-      "shell: reject pre prevents side effect, next independent call and same-session user turn complete",
-      "shell: reject post masks full result, next independent call and same-session user turn complete",
-      "MCP with codemode=false: allow pre/post, description/schema observed",
-      "MCP with codemode=false: reject post masks result; same-session continuation works",
-      "Tool.Error: allow pre/post forwards error",
-      "Tool.Error: reject post masks error; same-session continuation works",
-      "startup: invalid state directory denies tools but model conversation completes",
-      "enabled: text-only response completes without tool checkpoints",
-      "disabled: model/tool complete with no sensor state or UI"
+      "shell/approve",
+      "shell/reject-pre",
+      "mcp/reject-post",
+      "read-error/reject-post",
+      "managed-service"
+    ],
+    "runtime": "actual pinned OpenCode 2.0.22",
+    "model": "local deterministic OpenAI-compatible fixture; no external LLM",
+    "installation": "Standalone packaged bundle without plugin node_modules",
+    "interaction": "Native session/form APIs; no visual UI click automation",
+    "bundle_sha256_before_and_after": "unchanged",
+    "verification": [
+      "Native session forms show bound tool, phase, classifier reason and explicit choices.",
+      "Reject blocks the specific operation/result and permits another tool and next turn in the same session.",
+      "Managed service discovery works without explicit serverURL.",
+      "No external browser opener or separate sensor control.json was used."
     ]
   },
-  "packaged_live_smoke": {
-    "status": "passed",
-    "passed": 4,
-    "failed": 0,
-    "scenarios": [
-      "shell/reject-pre",
-      "shell/reject-post",
-      "mcp/reject-post",
-      "read-error/reject-post"
-    ],
-    "installation": "Fresh extracted ZIP without plugin node_modules",
-    "sha256_checksums": "all matched",
-    "continuation": "Every rejection case verifies another independently approved tool and a new user turn in the same session, with the same running server/plugin and approval control identity."
-  },
   "review": {
-    "status": "completed; no unresolved findings in per-action rejection, post redaction and cancellation races",
+    "status": "manual source review completed",
     "verified": [
-      "Pre refusal uses recoverable typed Tool.Error through the pinned Effect API",
-      "Rejection affects only the current bound checkpoint; parallel and parent/child checkpoints remain independent",
-      "Post refusal replaces the complete result/error including structured output and metadata",
-      "Native cancellation invalidates in-flight checks without preventing subsequent turns",
-      "Approval cancellation during server startup cannot leave an orphan request",
-      "No change to V1 plugin"
+      "Native forms bind immutable request ID, phase, session, digest and fields; only explicit allow releases one checkpoint.",
+      "Desktop renderer requires metadata.kind=question and reads field.title; native forms provide both.",
+      "Installed Desktop 2.0.22 and exact TUI 2.0.22 render these field types and serialize string option values to the exact decision object.",
+      "Default connection discovers only its own existing service and checks server PID and version.",
+      "Classifier unavailability stays fail-open; native form failure cancels only the current checkpoint.",
+      "Post replacement scrubs the entire result/error; rejection never latches a session."
     ]
   },
   "limits": [
@@ -67,7 +62,43 @@
     "Pre refusals may have no post hook because the tool did not execute.",
     "Already-running parallel tools may finish; each intercepted checkpoint requires its own decision.",
     "An independently installed legacy V1 adapter can still latch sessions; remove it from discovery when upgrading.",
-    "Self-load failures before hook registration cannot be enforced by the plugin."
+    "Self-load failures before hook registration cannot be enforced by the plugin.",
+    "Feedback is returned through tool error/result and asks the model to explain it. No separate assistant message is inserted; exact final chat wording is not guaranteed.",
+    "Tool names and classifier reasons are limited to 200 and 1000 source characters, with an explicit truncation marker.",
+    "Desktop/TUI UI compatibility verified from installed renderer code; no manual visual click test.",
+    "Noninteractive opencode run cancels forms; interactive TUI is required for manual approvals.",
+    "V1 1.18.11 retains its browser confirmation UI; native forms are V2-only.",
+    "If a form create request loses its acknowledgement and commits after cleanup, an inert pending card can remain; it cannot release the cancelled action."
   ],
-  "tested_bundle_sha256": "3ad1e441599ef3bacc5c7235b1dcace4e68aa13133cbe9678acd81cbf33930e7"
+  "tested_bundle_sha256": "e5f99213d5862398bec10fd80c7b826b91c08437bbe5f19d9882be7a4d8c215a",
+  "live_tests": {
+    "status": "passed",
+    "passed": 12,
+    "failed": 0,
+    "scenarios": [
+      "shell/approve",
+      "shell/reject-pre",
+      "shell/reject-post",
+      "shell/cancel-pre",
+      "mcp/approve",
+      "mcp/reject-post",
+      "read-error/approve",
+      "read-error/reject-post",
+      "disabled",
+      "text-only",
+      "startup-failure",
+      "managed-service"
+    ],
+    "runtime": "actual pinned OpenCode 2.0.22",
+    "model": "local deterministic OpenAI-compatible fixture; no external LLM",
+    "interaction": "session.create/prompt/wait and native form list/get/reply/cancel HTTP APIs; visual UI clicks not tested",
+    "verification": [
+      "Each native form is visible to the Desktop selector (kind=question), has a quarantine field title and explicit allow/reject choices without a default.",
+      "Pre gates prevent file effects while pending or rejected. Post gates prevent result/error data reaching the next model request until allowed.",
+      "After reject/cancel the same session executes an independently approved tool and completes a later user turn.",
+      "No browser opener is launched and no separate sensor approval server control file is created, even with legacy openBrowser=true.",
+      "Managed OpenCode service is discovered automatically without serverURL; credentials come from its registration, and PID/version checks pass.",
+      "Text-only, disabled and startup-failure behavior remains compatible with session continuation."
+    ]
+  }
 }

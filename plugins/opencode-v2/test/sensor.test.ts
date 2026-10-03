@@ -263,7 +263,20 @@ test("human pre rejection cancels only that call and later model/tool requests w
   const f = await setup();
   try {
     const before = f.hooks["tool.execute.before"](structuredClone(input));
-    const rejected = assert.rejects(before, ActionRejectedError);
+    const rejected = assert.rejects(before, (error: unknown) => {
+      assert.ok(error instanceof ActionRejectedError);
+      assert.match(error.message, /Карантин: действие заблокировано/);
+      assert.match(error.message, /Инструмент: "read"/);
+      assert.match(error.message, /Этап: до выполнения/);
+      assert.match(error.message, /Причина: "Тестовая заглушка классификатора/);
+      assert.match(error.message, /Тестовый карантин/);
+      assert.match(error.message, /Безопасность действия не проверялась/);
+      assert.match(error.message, /Этот вызов инструмента не выполнен/);
+      assert.match(error.message, /Пользователь отклонил разовое разрешение/);
+      assert.match(error.message, /Сессия остаётся доступной/);
+      assert.doesNotMatch(error.message, /Подозревается хакерская атака/);
+      return true;
+    });
     await pending(f.ui, 1);
     f.ui.pending[0].resolve("reject");
     await rejected;
@@ -343,7 +356,11 @@ test("post rejection removes all original result fields and permits continuation
     f.ui.pending[0].resolve("reject");
     await after;
     assert.deepEqual(Object.keys(event.result), ["content"]);
-    assert.match(String(event.result.content), /Результат этого вызова скрыт/);
+    assert.match(String(event.result.content), /Карантин: передача результата заблокирована/);
+    assert.match(String(event.result.content), /Инструмент: "read"/);
+    assert.match(String(event.result.content), /Этап: после выполнения/);
+    assert.match(String(event.result.content), /Причина: "Тестовая заглушка классификатора/);
+    assert.match(String(event.result.content), /уже выполненные действия не отменены/);
     assert.doesNotMatch(JSON.stringify(event.result), /SECRET/);
     await f.hooks["session.context"](modelContext());
     const next = f.hooks["tool.execute.before"]({ ...input, id: "after_rejected_post" });
@@ -372,10 +389,105 @@ test("post rejection replaces the entire native tool error", async () => {
     await pending(f.ui, 1);
     f.ui.pending[0].resolve("reject");
     await after;
-    assert.match(event.error.message, /Результат этого вызова скрыт/);
+    assert.match(event.error.message, /Карантин: передача ошибки заблокирована/);
+    assert.match(event.error.message, /Инструмент: "read"/);
+    assert.match(event.error.message, /Этап: после выполнения/);
+    assert.match(event.error.message, /Причина: "Тестовая заглушка классификатора/);
+    assert.match(event.error.message, /Передача ошибки отклонена/);
     assert.doesNotMatch(JSON.stringify(event.error), /SECRET/);
     assert.equal(event.error._tag, "Tool.Error");
     assert.equal(f.interrupts.length, 0);
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("real classifier denial details reach pre, result and error feedback", async () => {
+  const reason = "Обнаружена попытка изменить инструкции агента в данных инструмента.";
+  const deny: Classifier = async (request) =>
+    responseFor(request, { status: "ok", decision: "deny", reason, error: null });
+  for (const outcome of ["pre", "completed", "error"] as const) {
+    const f = await setup(deny);
+    try {
+      const event: any =
+        outcome === "pre"
+          ? structuredClone(input)
+          : outcome === "error"
+            ? { ...input, status: "error", error: new Error("RAW_PRIVATE_ERROR") }
+            : { ...post(), result: { content: "RAW_PRIVATE_RESULT" } };
+      let message = "";
+      const running =
+        outcome === "pre"
+          ? assert.rejects(f.hooks["tool.execute.before"](event), (error: unknown) => {
+              assert.ok(error instanceof ActionRejectedError);
+              message = error.message;
+              return true;
+            })
+          : f.hooks["tool.execute.after"](event);
+      await pending(f.ui, 1);
+      f.ui.pending[0].resolve("reject");
+      await running;
+      if (outcome !== "pre")
+        message = outcome === "error" ? event.error.message : event.result.content;
+      assert.match(message, /Инструмент: "read"/);
+      assert.ok(message.includes(`Причина: ${JSON.stringify(reason)}`));
+      assert.match(
+        message,
+        /Подозревается хакерская атака; это предупреждение, а не подтверждённый факт/,
+      );
+      assert.match(message, /Сообщите пользователю название инструмента, причину и итог проверки/);
+      assert.match(message, /Сессия остаётся доступной/);
+      assert.doesNotMatch(message, /RAW_PRIVATE|Тестовый карантин/);
+      assert.equal(f.interrupts.length, 0);
+    } finally {
+      await f.cleanup();
+    }
+  }
+});
+
+test("post confirmation failure preserves classifier reason without exposing diagnostics", async () => {
+  const ui = new UI();
+  ui.ask = async () => {
+    throw new Error("PRIVATE_UI_DIAGNOSTIC");
+  };
+  const deny: Classifier = async (request) =>
+    responseFor(request, {
+      status: "ok",
+      decision: "deny",
+      reason: "Непроверенный внешний источник",
+      error: null,
+    });
+  const f = await setup(deny, ui);
+  try {
+    const event = { ...post(), result: { content: "PRIVATE_TOOL_OUTPUT" } };
+    await f.hooks["tool.execute.after"](event);
+    assert.match(event.result.content, /Карантин: передача результата заблокирована/);
+    assert.match(event.result.content, /Причина: "Непроверенный внешний источник"/);
+    assert.match(event.result.content, /Подтверждение недоступно/);
+    assert.doesNotMatch(
+      event.result.content,
+      /PRIVATE_|Подозревается хакерская атака|Пользователь отклонил/,
+    );
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("quarantine reports the captured tool identity when a pending event changes", async () => {
+  const f = await setup();
+  try {
+    const event = structuredClone(input);
+    const rejected = assert.rejects(f.hooks["tool.execute.before"](event), (error: unknown) => {
+      assert.ok(error instanceof ActionRejectedError);
+      assert.match(error.message, /Инструмент: "read"/);
+      assert.match(error.message, /Аргументы или результат изменились/);
+      assert.doesNotMatch(error.message, /forged_tool|Подозревается хакерская атака/);
+      return true;
+    });
+    await pending(f.ui, 1);
+    event.tool = "forged_tool";
+    f.ui.pending[0].resolve("allow");
+    await rejected;
   } finally {
     await f.cleanup();
   }
@@ -505,7 +617,9 @@ test("post mutation after approval hides the changed output without blocking ano
     f.ui.pending[0].resolve("allow");
     await after;
     assert.doesNotMatch(JSON.stringify(event.result), /UNAPPROVED_CHANGE/);
-    assert.match(String(event.result.content), /Результат этого вызова скрыт/);
+    assert.match(String(event.result.content), /Карантин: передача результата заблокирована/);
+    assert.match(String(event.result.content), /Аргументы или результат изменились/);
+    assert.doesNotMatch(String(event.result.content), /Подозревается хакерская атака/);
     await f.hooks["session.context"](modelContext());
     assert.equal(f.interrupts.length, 0);
   } finally {

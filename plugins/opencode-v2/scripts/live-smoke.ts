@@ -2,16 +2,18 @@ import assert from "node:assert/strict";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { once } from "node:events";
-import { access, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { access, chmod, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer, type Server, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { OpenCode } from "@opencode/client";
+import { Service } from "@opencode/client/service";
 
-// This tests plugin plumbing against the actual pinned OpenCode executable;
-// the deterministic local model does not measure classifier/model quality.
-type Scenario = "approve" | "reject-pre" | "reject-post";
+// This tests the actual pinned OpenCode server through its native client APIs.
+// Noninteractive `opencode run` cancels native forms, so it cannot drive these approvals.
+// The deterministic local model does not measure classifier/model quality or UI rendering.
+type Scenario = "approve" | "reject-pre" | "reject-post" | "cancel-pre";
 type ToolKind = "shell" | "mcp" | "read-error" | "none";
 type Json = Record<string, any>;
 type Approval = {
@@ -22,7 +24,7 @@ type Approval = {
   session_id: string;
   tool: string;
 };
-type Control = { origin: string; token: string };
+type NativeClient = ReturnType<typeof OpenCode.make>;
 type ProcessState = { child: ChildProcess; exited: boolean; code: number | null; output: string };
 
 const packageDirectory = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -63,46 +65,106 @@ function diagnostics(value: string): string {
   return value.replace(/(https?:\/\/127\.0\.0\.1:\d+\/#)[^\s]+/g, "$1[redacted]").slice(-8_000);
 }
 
-async function readControl(directory: string): Promise<Control | undefined> {
-  try {
-    const info = JSON.parse(await readFile(join(directory, "control.json"), "utf8"));
-    const url = new URL(info.url);
-    assert.equal(url.hostname, "127.0.0.1");
-    assert.equal(url.protocol, "http:");
-    assert.ok(url.hash.length > 1, "Control URL must contain the private approval token");
-    return { origin: url.origin, token: url.hash.slice(1) };
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
-    throw error;
+async function pending(client: NativeClient, directory: string): Promise<Approval[]> {
+  const { data: forms } = await client.form.list(
+    { location: { directory } },
+    { signal: AbortSignal.timeout(2_000) },
+  );
+  const result: Approval[] = [];
+  for (const form of forms.filter((item) => item.metadata?.sensor === "opencode-sensor-v2")) {
+    const detail = await client.session.form.get(
+      { sessionID: form.sessionID, formID: form.id },
+      { signal: AbortSignal.timeout(2_000) },
+    );
+    if (detail.state.status !== "pending") continue;
+    const metadata = detail.metadata!;
+    assert.equal(metadata.kind, "question", "Desktop requires the native question form kind");
+    assert.equal(metadata.session_id, form.sessionID);
+    assert.equal(typeof metadata.request_id, "string");
+    assert.equal(typeof metadata.phase, "string");
+    assert.equal(typeof metadata.binding_digest, "string");
+    assert.equal(typeof metadata.tool, "string");
+    assert.ok(detail.title.includes("Карантин"));
+    assert.equal(detail.fields.length, 1);
+    const field = detail.fields[0];
+    assert.equal(field.key, "decision");
+    assert.ok(field.title?.includes("Карантин"));
+    assert.ok(field.title?.includes(metadata.tool as string));
+    assert.equal(field.type, "string");
+    assert.equal(field.required, true);
+    assert.equal("default" in field, false, "Native approval must not have a default answer");
+    assert.ok(field.type === "string" && field.custom === false);
+    assert.deepEqual(
+      field.options?.map((option) => option.value),
+      ["reject", "allow"],
+    );
+    assert.ok(field.description?.includes("Тестовая заглушка классификатора"));
+    result.push({
+      id: form.id,
+      request_id: metadata.request_id as string,
+      phase: metadata.phase as string,
+      binding_digest: metadata.binding_digest as string,
+      session_id: form.sessionID,
+      tool: metadata.tool as string,
+    });
   }
+  return result;
 }
 
-async function pending(control: Control): Promise<Approval[]> {
-  const response = await fetch(`${control.origin}/api/pending`, {
-    headers: { Authorization: `Bearer ${control.token}` },
-    signal: AbortSignal.timeout(2_000),
-  });
-  assert.equal(response.status, 200);
-  return ((await response.json()) as { pending: Approval[] }).pending;
+async function decide(
+  client: NativeClient,
+  approval: Approval,
+  decision: "allow" | "reject" | "cancel",
+) {
+  const input = { sessionID: approval.session_id, formID: approval.id };
+  if (decision === "cancel") {
+    await client.session.form.cancel(input, { signal: AbortSignal.timeout(2_000) });
+  } else {
+    await client.session.form.reply(
+      { ...input, answer: { decision } },
+      { signal: AbortSignal.timeout(2_000) },
+    );
+  }
+  const detail = await client.session.form.get(input, { signal: AbortSignal.timeout(2_000) });
+  assert.equal(detail.state.status, decision === "cancel" ? "cancelled" : "answered");
+  if (detail.state.status === "answered") assert.deepEqual(detail.state.answer, { decision });
 }
 
-async function decide(control: Control, approval: Approval, decision: "allow" | "reject") {
-  const response = await fetch(`${control.origin}/api/decision`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${control.token}`,
-      Origin: control.origin,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      id: approval.id,
-      phase: approval.phase,
-      binding_digest: approval.binding_digest,
-      decision,
-    }),
-    signal: AbortSignal.timeout(2_000),
-  });
-  assert.equal(response.status, 200, `Approval decision failed: ${await response.text()}`);
+function assertQuarantineFeedback(
+  messages: Json[],
+  tool: string,
+  phase: "pre" | "post",
+  errorOutcome = false,
+) {
+  const result = messages.find((message) => message.tool_call_id === "call_smoke_first");
+  assert.ok(result, "Quarantined call feedback never reached the model");
+  let feedback =
+    typeof result.content === "string"
+      ? result.content
+      : result.content.map((part: Json) => part.text ?? "").join("\n");
+  try {
+    const envelope = JSON.parse(feedback) as Json;
+    if (typeof envelope.error?.message === "string") feedback = envelope.error.message;
+  } catch {
+    // A regular tool result is already plain text; native errors may use a JSON envelope.
+  }
+  assert.ok(
+    feedback.includes(
+      phase === "pre"
+        ? "[OpenCode Sensor] Карантин: действие заблокировано."
+        : errorOutcome
+          ? "[OpenCode Sensor] Карантин: передача ошибки заблокирована."
+          : "[OpenCode Sensor] Карантин: передача результата заблокирована.",
+    ),
+    "Model-bound quarantine feedback lost its action-specific status",
+  );
+  assert.ok(feedback.includes(`Инструмент: ${JSON.stringify(tool)}`));
+  assert.ok(feedback.includes(`Этап: ${phase === "pre" ? "до выполнения" : "после выполнения"}`));
+  assert.match(feedback, /Причина:.*Тестовая заглушка классификатора отклоняет все операции/);
+  assert.ok(feedback.includes("Безопасность этого действия не проверялась."));
+  assert.ok(feedback.includes("Тестовый карантин"), "Stub denial was presented as a real attack");
+  assert.ok(feedback.includes("Сессия остаётся доступной."));
+  assert.ok(feedback.includes("Не повторяйте это действие без нового разрешения пользователя."));
 }
 
 async function assertAuditContext(directory: string, approval: Approval, label: string) {
@@ -361,7 +423,8 @@ function startProcess(args: string[], cwd: string, env: NodeJS.ProcessEnv): Proc
 }
 
 async function approveIndependentCall(
-  control: Control,
+  client: NativeClient,
+  workdir: string,
   stateDirectory: string,
   state: ProcessState,
   sessionID: string,
@@ -371,7 +434,7 @@ async function approveIndependentCall(
 ) {
   const pre = await poll(
     `${callID} pre approval`,
-    async () => (await pending(control)).find((item) => item.phase.startsWith("pre")),
+    async () => (await pending(client, workdir)).find((item) => item.phase.startsWith("pre")),
     state,
   );
   assert.equal(pre.session_id, sessionID, "Independent operation moved to another session");
@@ -380,15 +443,15 @@ async function approveIndependentCall(
   );
   assert.equal(preRequest.current_call.tool_call_id, callID);
   assert.equal(await exists(marker), false, "Independent operation ran without pre approval");
-  await decide(control, pre, "allow");
+  await decide(client, pre, "allow");
   const post = await poll(
     `${callID} post approval`,
-    async () => (await pending(control)).find((item) => item.phase.startsWith("post")),
+    async () => (await pending(client, workdir)).find((item) => item.phase.startsWith("post")),
     state,
   );
   assert.equal(post.session_id, sessionID);
   assert.equal(await readFile(marker, "utf8"), expectedContent);
-  await decide(control, post, "allow");
+  await decide(client, post, "allow");
 }
 
 async function runScenario(
@@ -396,29 +459,64 @@ async function runScenario(
   toolKind: ToolKind = "shell",
   brokenStartup = false,
   disabled = false,
+  managedService = false,
 ) {
   if (
     process.env.SMOKE_CASES &&
     !process.env.SMOKE_CASES.split(",").includes(
-      disabled ? "disabled" : brokenStartup ? "startup-failure" : `${toolKind}/${scenario}`,
+      managedService
+        ? "managed-service"
+        : disabled
+          ? "disabled"
+          : brokenStartup
+            ? "startup-failure"
+            : `${toolKind}/${scenario}`,
     )
   )
     return;
   const temporary = await mkdtemp(join(tmpdir(), `opencode-sensor-v2-${scenario}-`));
   const workdir = join(temporary, "workspace");
   const stateDirectory = join(temporary, "sensor");
+  const browserMarker = join(temporary, "browser-opened.txt");
+  const binDirectory = join(temporary, "bin");
   const marker = join(workdir, "first-operation.txt");
   const nextMarker = join(workdir, "subsequent-operation.txt");
   const followupMarker = join(workdir, "followup-operation.txt");
   const sentinel = `SENSOR_PRIVATE_RESULT_${scenario.replaceAll("-", "_")}`;
   await mkdir(workdir, { recursive: true });
+  await mkdir(join(temporary, "home"));
+  await mkdir(binDirectory);
+  for (const name of ["open", "xdg-open"]) {
+    const entry = join(binDirectory, name);
+    await writeFile(entry, `#!/bin/sh\nprintf 'opened' >> ${shellQuote(browserMarker)}\nexit 97\n`);
+    await chmod(entry, 0o755);
+  }
+  const assertNativeOnly = async () => {
+    assert.equal(
+      await exists(join(stateDirectory, "control.json")),
+      false,
+      "Native sensor created a separate approval server control file",
+    );
+    assert.equal(
+      await exists(browserMarker),
+      false,
+      "Native sensor attempted to launch an external browser",
+    );
+  };
   if (brokenStartup) await writeFile(stateDirectory, "A file cannot be used as a state directory");
   const model = await mockModel(scenario, marker, nextMarker, followupMarker, sentinel, toolKind);
-  let processState: ProcessState | undefined;
   let serverState: ProcessState | undefined;
   const completedOutput: string[] = [];
   let passed = false;
   try {
+    // A real persistent harness owns every native form, including approve-only cases.
+    const portReservation = createServer();
+    portReservation.listen(0, "127.0.0.1");
+    await once(portReservation, "listening");
+    const address = portReservation.address();
+    assert.ok(address && typeof address !== "string");
+    const baseUrl = `http://127.0.0.1:${address.port}`;
+    await stopServer(portReservation);
     const configPath = join(workdir, "opencode.json");
     await writeFile(
       configPath,
@@ -451,7 +549,9 @@ async function runScenario(
               options: {
                 enabled: !disabled,
                 stateDirectory,
-                openBrowser: false,
+                serverURL: managedService ? undefined : baseUrl,
+                // Obsolete options must not resurrect the old external approval page.
+                openBrowser: true,
                 apiTimeoutMs: 2_000,
                 classifierTimeoutMs: 3_000,
               },
@@ -479,7 +579,7 @@ async function runScenario(
     );
 
     const environment = {
-      PATH: `${dirname(process.execPath)}:${process.env.PATH ?? "/usr/bin:/bin"}`,
+      PATH: `${binDirectory}:${dirname(process.execPath)}:${process.env.PATH ?? "/usr/bin:/bin"}`,
       TMPDIR: temporary,
       HOME: join(temporary, "home"),
       LANG: "en_US.UTF-8",
@@ -494,63 +594,98 @@ async function runScenario(
       OPENCODE_DISABLE_MODELS_FETCH: "true",
       OPENCODE_PASSWORD: randomBytes(24).toString("hex"),
     };
-    const connection = ["--standalone"];
-    if (scenario !== "approve") {
-      // Keep the plugin instance alive between CLI invocations: --continue with
-      // --standalone would create a new plugin instance and miss a stale latch.
-      const portReservation = createServer();
-      portReservation.listen(0, "127.0.0.1");
-      await once(portReservation, "listening");
-      const address = portReservation.address();
-      assert.ok(address && typeof address !== "string");
-      const baseUrl = `http://127.0.0.1:${address.port}`;
-      await stopServer(portReservation);
-      serverState = startProcess(
-        ["serve", "--hostname", "127.0.0.1", "--port", String(address.port), "--print-logs"],
-        workdir,
-        environment,
-      );
-      const client = OpenCode.make({
-        baseUrl,
-        headers: {
-          Authorization: `Basic ${Buffer.from(`opencode:${environment.OPENCODE_PASSWORD}`).toString("base64")}`,
-        },
-      });
-      await poll(
-        "persistent OpenCode server",
-        async () => {
-          try {
-            await client.server.info({ signal: AbortSignal.timeout(2_000) });
-            return true;
-          } catch {
-            return undefined;
-          }
-        },
-        serverState,
-      );
-      connection.splice(0, connection.length, "--server", baseUrl);
-    }
-    const runArguments = [
-      "run",
-      ...connection,
-      "--auto",
-      "--print-logs",
-      "--format",
-      "json",
-      "--model",
-      "sensor-smoke/deterministic",
-    ];
-    const state = (processState = startProcess(
-      [...runArguments, "Run the local smoke operation, then finish."],
+    serverState = startProcess(
+      [
+        "serve",
+        ...(managedService ? ["--service"] : []),
+        "--hostname",
+        "127.0.0.1",
+        "--port",
+        String(address.port),
+        "--print-logs",
+      ],
       workdir,
       environment,
-    ));
+    );
+    const endpoint = managedService
+      ? await poll(
+          "managed OpenCode service registration",
+          () =>
+            Service.discover({
+              file: join(environment.XDG_STATE_HOME, "opencode", "service.json"),
+              version: "2.0.22",
+            }),
+          serverState,
+        )
+      : undefined;
+    const client = OpenCode.make({
+      baseUrl: endpoint?.url ?? baseUrl,
+      headers: endpoint
+        ? Service.headers(endpoint)
+        : {
+            Authorization: `Basic ${Buffer.from(`opencode:${environment.OPENCODE_PASSWORD}`).toString("base64")}`,
+          },
+    });
+    await poll(
+      "persistent OpenCode server",
+      async () => {
+        try {
+          const info = await client.server.info({ signal: AbortSignal.timeout(2_000) });
+          assert.equal(info.pid, serverState!.child.pid);
+          return true;
+        } catch {
+          return undefined;
+        }
+      },
+      serverState,
+    );
+    const state = serverState;
+    const session = await client.session.create({
+      location: { directory: workdir },
+      model: { providerID: "sensor-smoke", id: "deterministic" },
+      permissions: [{ action: "*", resource: "*", effect: "allow" }],
+    });
+    const waitForTurn = async (completion: string) => {
+      await client.session.wait(
+        { sessionID: session.id },
+        {
+          signal: AbortSignal.timeout(stageTimeoutMs),
+        },
+      );
+      await poll(
+        completion,
+        async () => {
+          const messages = await client.message.list(
+            { sessionID: session.id, limit: 100 },
+            {
+              signal: AbortSignal.timeout(2_000),
+            },
+          );
+          const complete = messages.data.some(
+            (message) =>
+              message.type === "assistant" &&
+              message.time.completed &&
+              message.content.some(
+                (part) => part.type === "text" && part.text.includes(completion),
+              ),
+          );
+          if (!complete) return undefined;
+          const active = await client.session.active({ signal: AbortSignal.timeout(2_000) });
+          if (active[session.id]) return undefined;
+          completedOutput.push(JSON.stringify(messages.data));
+          return true;
+        },
+        state,
+      );
+    };
+    await client.session.prompt({
+      sessionID: session.id,
+      text: "Run the local smoke operation, then finish.",
+    });
 
     if (disabled || toolKind === "none") {
-      await poll("ungated completion", async () => (state.exited ? true : undefined));
-      assert.equal(state.code, 0, diagnostics(state.output));
+      await waitForTurn("SMOKE_COMPLETE");
       assert.deepEqual(model.failures, []);
-      assert.ok(state.output.includes("SMOKE_COMPLETE"), "Model did not finish normally");
       if (disabled) {
         assert.equal(await readFile(marker, "utf8"), "executed");
         assert.equal(model.primaryRequests.length, 2);
@@ -578,25 +713,27 @@ async function runScenario(
           "PASS text-only: enabled protection permits a normal model response without tool approvals",
         );
       }
+      await assertNativeOnly();
+      assert.deepEqual(await pending(client, workdir), []);
       passed = true;
       return;
     }
     if (brokenStartup) {
-      await poll("failed startup completion", async () => (state.exited ? true : undefined));
-      assert.equal(state.code, 0, diagnostics(state.output));
+      await waitForTurn("SMOKE_COMPLETE");
       assert.deepEqual(model.failures, []);
       assert.equal(await exists(marker), false, "Operation escaped after sensor startup failure");
       assert.equal(model.primaryRequests.length, 2, "Startup failure prevented model continuation");
-      assert.ok(
-        state.output.includes("SMOKE_COMPLETE"),
-        "Model could not reply after startup failure",
-      );
       assert.ok(
         model.allRequests.some((request) =>
           request.messages.some(
             (message: Json) =>
               message.role === "tool" &&
-              JSON.stringify(message.content).includes("проверка этого действия недоступна"),
+              JSON.stringify(message.content).includes("Карантин: действие заблокировано.") &&
+              JSON.stringify(message.content).includes("Сенсор не готов к проверке действия.") &&
+              JSON.stringify(message.content).includes(
+                "Это техническая отмена проверки, а не сообщение об обнаруженной атаке.",
+              ) &&
+              JSON.stringify(message.content).includes("Сессия остаётся доступной."),
           ),
         ),
         "Startup failure did not become a safe tool error",
@@ -605,24 +742,26 @@ async function runScenario(
         state.output.includes("Сенсор не запустился"),
         "Expected registered sensor startup failure",
       );
+      await assertNativeOnly();
+      assert.deepEqual(await pending(client, workdir), []);
       passed = true;
       console.log("PASS startup-failure: tool blocked; model and text response complete normally");
       return;
     }
-    const control = await poll("approval server", () => readControl(stateDirectory), state);
     const pre = await poll(
-      "pre approval",
+      "native pre approval",
       async () => {
-        const items = await pending(control);
+        const items = await pending(client, workdir);
         if (toolKind === "mcp") {
           for (const item of items.filter((item) => item.tool === "shell"))
-            await decide(control, item, "allow");
+            await decide(client, item, "allow");
           return items.find((item) => item.tool !== "shell" && item.phase.startsWith("pre"));
         }
         return items.find((item) => item.phase.startsWith("pre"));
       },
       state,
     );
+    assert.equal(pre.session_id, session.id, "Native approval belongs to a different session");
     assert.ok(pre.request_id && pre.binding_digest);
     assert.equal(await exists(marker), false, "Pre gate allowed the operation before approval");
     await pause(300);
@@ -630,13 +769,13 @@ async function runScenario(
 
     await assertAuditContext(stateDirectory, pre, `${scenario}/pre`);
 
-    if (scenario === "reject-pre") {
-      await decide(control, pre, "reject");
+    if (scenario === "reject-pre" || scenario === "cancel-pre") {
+      await decide(client, pre, scenario === "cancel-pre" ? "cancel" : "reject");
     } else {
-      await decide(control, pre, "allow");
+      await decide(client, pre, "allow");
       const post = await poll(
         "post approval",
-        async () => (await pending(control)).find((item) => item.phase.startsWith("post")),
+        async () => (await pending(client, workdir)).find((item) => item.phase.startsWith("post")),
         state,
       );
       if (toolKind !== "read-error") assert.equal(await readFile(marker, "utf8"), "executed");
@@ -667,12 +806,13 @@ async function runScenario(
         resultRequestCount,
         "Tool results reached a model request while the post approval was pending",
       );
-      await decide(control, post, scenario === "approve" ? "allow" : "reject");
+      await decide(client, post, scenario === "approve" ? "allow" : "reject");
     }
 
     if (scenario !== "approve") {
       await approveIndependentCall(
-        control,
+        client,
+        workdir,
         stateDirectory,
         state,
         pre.session_id,
@@ -681,9 +821,7 @@ async function runScenario(
         "call_smoke_subsequent",
       );
     }
-    await poll("OpenCode completion", async () => (state.exited ? true : undefined));
-    assert.equal(state.code, 0, diagnostics(state.output));
-    assert.ok(state.output.includes("SMOKE_COMPLETE"), "Agent did not finish the original turn");
+    await waitForTurn("SMOKE_COMPLETE");
     assert.deepEqual(model.failures, [], "Mock model fixture failed");
     const forwardedToolResults = () =>
       model.allRequests.flatMap((request) =>
@@ -696,29 +834,13 @@ async function runScenario(
     if (scenario === "approve") {
       assert.equal(await exists(nextMarker), false);
       assert.equal(resultForwarded, true, "Approved result never reached the model");
-    } else if (scenario === "reject-pre") {
+    } else if (scenario === "reject-pre" || scenario === "cancel-pre") {
       assert.equal(await exists(marker), false, "Rejected operation created its marker");
       assert.equal(resultForwarded, false, "Rejected pre call produced a private result");
-      assert.ok(
-        forwardedResults.some(
-          (message) =>
-            message.tool_call_id === "call_smoke_first" &&
-            JSON.stringify(message.content).includes("пользователь отменил это действие"),
-        ),
-        "Pre rejection did not become a tool error visible to the model",
-      );
+      assertQuarantineFeedback(forwardedResults, pre.tool, "pre");
     } else {
       assert.equal(resultForwarded, false, "Rejected post result reached the model");
-      assert.ok(
-        forwardedResults.some(
-          (message) =>
-            message.tool_call_id === "call_smoke_first" &&
-            JSON.stringify(message.content).includes(
-              "Результат этого вызова скрыт: передача не разрешена",
-            ),
-        ),
-        "Rejected post result was not replaced with the safe cancellation placeholder",
-      );
+      assertQuarantineFeedback(forwardedResults, pre.tool, "post", toolKind === "read-error");
     }
     if (scenario !== "approve") {
       assert.equal(await readFile(nextMarker, "utf8"), "independent");
@@ -732,40 +854,24 @@ async function runScenario(
         serverState && !serverState.exited,
         "Persistent server stopped before the next turn",
       );
-      completedOutput.push(state.output);
-      const followupState = (processState = startProcess(
-        [
-          ...runArguments,
-          "--session",
-          pre.session_id,
-          "Run the follow-up smoke operation in this same session, then finish. FOLLOW_UP_TURN",
-        ],
-        workdir,
-        environment,
-      ));
+      await client.session.prompt({
+        sessionID: session.id,
+        text: "Run the follow-up smoke operation in this same session, then finish. FOLLOW_UP_TURN",
+      });
       await approveIndependentCall(
-        control,
+        client,
+        workdir,
         stateDirectory,
-        followupState,
+        state,
         pre.session_id,
         followupMarker,
         "followup",
         "call_smoke_followup",
       );
-      await poll("same-session follow-up completion", async () =>
-        followupState.exited ? true : undefined,
-      );
-      assert.equal(followupState.code, 0, diagnostics(followupState.output));
-      assert.ok(
-        followupState.output.includes("SMOKE_FOLLOWUP_COMPLETE"),
-        "Next user turn did not finish",
-      );
+      await waitForTurn("SMOKE_FOLLOWUP_COMPLETE");
       assert.equal(await readFile(followupMarker, "utf8"), "followup");
-      assert.deepEqual(
-        await readControl(stateDirectory),
-        control,
-        "Sensor control changed between turns; plugin may have reloaded",
-      );
+      const host = await client.server.info({ signal: AbortSignal.timeout(2_000) });
+      assert.equal(host.pid, serverState.child.pid, "OpenCode host changed between turns");
       assert.deepEqual(model.failures, []);
       assert.equal(
         forwardedToolResults().some((message) =>
@@ -781,16 +887,20 @@ async function runScenario(
         "Approved follow-up result never reached the model",
       );
     }
+    await assertNativeOnly();
+    assert.deepEqual(
+      await pending(client, workdir),
+      [],
+      "Native approval remained pending after completion",
+    );
     passed = true;
     console.log(
-      `PASS ${toolKind}/${scenario}: ${model.primaryRequests.length} primary model request(s)`,
+      `PASS ${managedService ? "managed-service" : `${toolKind}/${scenario}`}: ${model.primaryRequests.length} primary model request(s)`,
     );
   } catch (error) {
     await writeFile(
       join(temporary, "opencode.log"),
-      diagnostics(
-        [...completedOutput, processState?.output ?? "", serverState?.output ?? ""].join("\n"),
-      ),
+      diagnostics([...completedOutput, serverState?.output ?? ""].join("\n")),
     );
     await writeFile(
       join(temporary, "model-requests.json"),
@@ -799,12 +909,22 @@ async function runScenario(
     console.error(`Smoke artifacts retained at ${temporary}`);
     throw error;
   } finally {
-    await stopProcess(processState);
     await stopProcess(serverState);
     await stopServer(model.server);
     if (passed && process.env.KEEP_SMOKE_ARTIFACTS !== "1")
       await rm(temporary, { recursive: true, force: true });
-    else if (passed) console.log(`Smoke artifacts retained at ${temporary}`);
+    else if (passed) {
+      await writeFile(
+        join(temporary, "model-requests.json"),
+        JSON.stringify(model.allRequests, null, 2),
+      );
+      await writeFile(
+        join(temporary, "session-transcripts.json"),
+        `[${completedOutput.join(",")}]\n`,
+      );
+      await writeFile(join(temporary, "opencode.log"), diagnostics(serverState?.output ?? ""));
+      console.log(`Smoke artifacts retained at ${temporary}`);
+    }
   }
 }
 
@@ -824,7 +944,7 @@ assert.match(
   /^opencode v2\.0\.22(?:\s|$)/,
   "Live smoke requires the pinned OpenCode 2.0.22",
 );
-for (const scenario of ["approve", "reject-pre", "reject-post"] as const)
+for (const scenario of ["approve", "reject-pre", "reject-post", "cancel-pre"] as const)
   await runScenario(scenario);
 
 for (const scenario of ["approve", "reject-post"] as const) await runScenario(scenario, "mcp");
@@ -834,3 +954,4 @@ for (const scenario of ["approve", "reject-post"] as const)
 await runScenario("approve", "shell", true);
 await runScenario("approve", "none");
 await runScenario("approve", "shell", false, true);
+await runScenario("approve", "shell", false, false, true);

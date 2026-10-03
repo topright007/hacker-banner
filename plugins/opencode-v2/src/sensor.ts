@@ -3,11 +3,12 @@ import type { Plugin } from "@opencode/plugin";
 import { serializeError } from "./sanitize.js";
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
-import { ApprovalServer } from "./approval-server.js";
+import { NativeApprovalUI } from "./native-approvals.js";
+import { createNativeFormsClient } from "./native-client.js";
 import { AuditLog } from "./audit.js";
 import { denyAllClassifier, type Classifier } from "./classifier.js";
 import { ContextCollector } from "./collector.js";
-import { ActionRejectedError } from "./gates.js";
+import { ActionRejectedError, quarantineMessage, type QuarantineCause } from "./gates.js";
 import { Error as ToolError } from "@opencode/plugin/promise/tool";
 import {
   assertResponse,
@@ -25,6 +26,9 @@ import {
 export interface SensorOptions {
   enabled?: boolean;
   stateDirectory?: string;
+  /** Existing OpenCode server; managed service discovery is used when omitted. */
+  serverURL?: string;
+  /** @deprecated Ignored. Confirmations are always inside OpenCode. */
   openBrowser?: boolean;
   apiTimeoutMs?: number;
   classifierTimeoutMs?: number;
@@ -111,8 +115,8 @@ export async function createSensor(
   ) {
     startupFailure = new Error("Sensor stateDirectory must be an absolute path");
   }
-  if (options.openBrowser !== undefined && typeof options.openBrowser !== "boolean")
-    startupFailure = new Error("Sensor openBrowser must be boolean");
+  if (options.serverURL !== undefined && typeof options.serverURL !== "string")
+    startupFailure = new Error("Sensor serverURL must be a string");
   const stateDirectory =
     typeof options.stateDirectory === "string" && isAbsolute(options.stateDirectory)
       ? resolve(options.stateDirectory)
@@ -143,20 +147,16 @@ export async function createSensor(
   function notify(message: string, variant = "warning"): void {
     void notice(message, variant).catch(() => undefined);
   }
-  async function ready(): Promise<void> {
-    if (!startupResolved) await startup;
-    if (closed || startupFailure) {
-      throw new ActionRejectedError(
-        "Sensor: проверка этого действия недоступна. Действие отменено; сессия доступна для дальнейших сообщений.",
-      );
-    }
-  }
-
   const approvals =
     dependencies.approvals ??
-    new ApprovalServer({
-      stateDirectory,
-      openBrowser: options.openBrowser ?? true,
+    new NativeApprovalUI({
+      client: () =>
+        createNativeFormsClient({
+          serverURL: options.serverURL,
+          channel: ctx.app.channel,
+          requestTimeoutMs: apiTimeoutMs,
+        }),
+      requestTimeoutMs: apiTimeoutMs,
       onNotice: (message) => notice(message),
     });
 
@@ -236,6 +236,19 @@ export async function createSensor(
   async function checkpoint(phase: Phase, hookInput: Native): Promise<void> {
     const observedAt = Date.now();
     const sessionID = hookInput.sessionID as string;
+    // Keep the checked identity even if another plugin changes the live event
+    // while the classifier or approval UI is pending.
+    const feedbackTool = hookInput.tool;
+    const feedbackOutcome = hookInput.status === "error" ? "error" : "result";
+    const reject = (cause: QuarantineCause, classifierReason?: string | null) =>
+      new ActionRejectedError({
+        phase,
+        tool: feedbackTool,
+        outcome: feedbackOutcome,
+        cause,
+        classifierReason,
+        testClassifier: classifier === denyAllClassifier,
+      });
     const checkpointToken = Symbol();
     const pending = { sessionID, cancelled: false };
     executingCheckpoints.set(checkpointToken, pending);
@@ -243,10 +256,8 @@ export async function createSensor(
     let call: Invocation | undefined;
     let released = false;
     const ensureCurrent = () => {
-      if (closed || startupFailure || pending.cancelled || call?.cancelled)
-        throw new ActionRejectedError(
-          "Sensor: проверка этого действия отменена. Для нового действия потребуется новое подтверждение.",
-        );
+      if (startupFailure) throw reject("startup_failure");
+      if (closed || pending.cancelled || call?.cancelled) throw reject("cancelled");
     };
     try {
       // Detach before any SDK or approval await; bindings never follow mutations.
@@ -278,7 +289,7 @@ export async function createSensor(
           ambiguousPreCalls.delete(key);
         }
       }
-      await ready();
+      if (!startupResolved) await startup;
       ensureCurrent();
       const collected = await collector.collect({
         phase,
@@ -367,11 +378,11 @@ export async function createSensor(
           let decision: "allow" | "reject";
           try {
             decision = await approvals.ask(request, response);
-          } catch {
+          } catch (error) {
             // A UI failure is not a classifier outage and must never auto-allow.
-            throw new ActionRejectedError(
-              "Sensor: подтверждение недоступно. Это действие отменено; сессия остаётся доступной.",
-            );
+            ensureCurrent();
+            notify(error instanceof Error ? error.message : "Approval UI failed", "error");
+            throw reject("confirmation_unavailable", response.reason);
           }
           ensureCurrent();
           if (decision === "reject") {
@@ -381,7 +392,7 @@ export async function createSensor(
               "deny",
               "Пользователь отклонил этот checkpoint.",
             );
-            throw new ActionRejectedError();
+            throw reject("user_rejected", response.reason);
           }
           await record(
             request,
@@ -398,9 +409,7 @@ export async function createSensor(
         digest(originalInput) !== digest(snapshotToolEvent(hookInput)) ||
         digest(originalOutput) !== digest(liveOutput)
       ) {
-        throw new ActionRejectedError(
-          "Sensor: аргументы или результат изменились во время подтверждения. Это действие отменено; разрешение устарело.",
-        );
+        throw reject("snapshot_changed");
       }
       released = true;
     } catch (error) {
@@ -410,9 +419,7 @@ export async function createSensor(
         "error",
       );
       notify(error instanceof Error ? error.message : "Sensor checkpoint failed", "error");
-      throw new ActionRejectedError(
-        "Sensor: проверка этого действия завершилась ошибкой. Действие отменено; сессия остаётся доступной.",
-      );
+      throw reject("internal_failure");
     } finally {
       executingCheckpoints.delete(checkpointToken);
       if (phase === "post_tool_call" || !released) {
@@ -430,13 +437,22 @@ export async function createSensor(
   }
 
   async function after(event: Native): Promise<void> {
+    const feedbackTool = event.tool;
+    const feedbackOutcome = event.status === "error" ? "error" : "result";
     try {
       await checkpoint("post_tool_call", event);
     } catch (error) {
       // V2's after hook supports mutable results/errors, not typed failures.
       // Replace the entire value, including structured output and attachments.
       const message =
-        "[OpenCode Sensor] Результат этого вызова скрыт: передача не разрешена. Не повторяйте действие без нового разрешения пользователя. Уже выполненные действия не отменены.";
+        error instanceof ActionRejectedError
+          ? error.message
+          : quarantineMessage({
+              phase: "post_tool_call",
+              tool: feedbackTool,
+              outcome: feedbackOutcome,
+              cause: "internal_failure",
+            });
       if (event.status === "error") event.error = new ToolError({ message });
       else event.result = { content: message };
       notify(error instanceof Error ? error.message : "Передача результата отменена.");
@@ -523,7 +539,7 @@ export async function createSensor(
     await collector.observeHook("shell.create.before", event);
   };
 
-  // Register the enforcement surface before starting fallible local services.
+  // Register the enforcement surface before initializing the audit and native UI.
   // Throwing setup after registration makes OpenCode unload the plugin: retain
   // registered hooks and fail closed instead of silently losing protection.
   try {
@@ -573,7 +589,7 @@ export async function createSensor(
   }
   if (!startupFailure)
     notify(
-      `Заглушка классификатора включена: каждый pre/post требует подтверждения. Локальное управление: ${join(stateDirectory, "control.json")}`,
+      "Заглушка классификатора включена: каждый pre/post требует подтверждения внутри OpenCode. Браузерная панель не используется.",
       "info",
     );
   return hooks;
