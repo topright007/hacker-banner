@@ -1,81 +1,49 @@
 {
-  "plugin_version": "0.4.0",
+  "plugin_version": "0.4.1",
   "contract_version": "2.3.0",
   "contract_versions": {
     "stub": "2.3.0",
     "agent_monitor": "2.2.0",
-    "accepted": [
-      "2.1.0",
-      "2.2.0",
-      "2.3.0"
-    ]
+    "accepted": ["2.1.0", "2.2.0", "2.3.0"]
   },
   "opencode_version": "2.0.22",
   "node_version": "v24.19.0",
   "platform": "darwin arm64",
-  "validated_at": "2026-10-03T11:58:45.748Z",
-  "change": "Compact native warnings and two choices: persistent per-session chat-only quarantine or bound checkpoint approval. Preserves the optional Agent Monitor backend.",
+  "validated_at": "2026-10-03T12:15:04.948169+00:00",
+  "change": "Submitted custom native-form text activates existing persistent chat-only quarantine. Per-form trust values prevent ordinary approval-like text from allowing. Desktop descriptions include the warning. Classifier and Agent Monitor implementations unchanged.",
   "build": "passed",
   "typecheck": "passed",
   "format_check": "passed",
   "unit_and_component_tests": {
-    "passed": 128,
+    "passed": 130,
     "failed": 0
   },
-  "tested_bundle_sha256": "622eadf5bf3d1f5af0f105a7b0b3ac0673a8c05d2a867df1872edf09b1611509",
+  "tested_bundle_sha256": "ddc1a31c9dd92121986d4500e5c9af4e0175cc0a743761eba9fa672886b6f591",
   "packaged_live_tests": {
     "status": "passed",
-    "passed": 19,
+    "passed": 4,
     "failed": 0,
     "installation": "Standalone immutable release-layout packages without node_modules; actual pinned OpenCode 2.0.22; no external LLM",
     "native_forms": {
-      "passed": 13,
-      "scenarios": [
-        "shell/approve",
-        "shell/quarantine-pre",
-        "shell/quarantine-post",
-        "shell/cancel-pre",
-        "mcp/approve",
-        "mcp/quarantine-post",
-        "read-error/approve",
-        "read-error/quarantine-post",
-        "startup-failure",
-        "text-only",
-        "disabled",
-        "managed-service",
-        "quarantine-restart"
-      ]
-    },
-    "agent_monitor": {
-      "passed": 6,
-      "scenarios": [
-        "allow-write",
-        "block-write",
-        "approve-write",
-        "reject-write",
-        "sensitive-read",
-        "unavailable"
-      ],
-      "service": "Actual Python Agent Monitor with isolated database/config/credentials"
+      "passed": 4,
+      "scenarios": ["shell/approve", "shell/cancel-pre", "shell/custom-pre", "shell/custom-post"],
+      "custom_answers": "Actual form.reply accepts Russian free text at pre and literal allow at post. Both activate quarantine; continuation and next user turn have no tools or additional approvals; two native execution.succeeded events and no interrupted/failed events per custom case."
     },
     "interaction": "Native session/form APIs and local deterministic model; visual UI clicks not automated"
   },
   "review": {
-    "status": "independent source review completed; findings fixed and regression tested",
+    "status": "focused independent source review of native approval change; no consequential defects reported",
     "verified": [
-      "Native forms display warning, tool and bounded reason, with exactly quarantine/allow choices and no custom answer.",
-      "Allow releases only the bound checkpoint; pre and post approvals remain independent.",
-      "Quarantine blocks tools and withholds late results, strips model-facing tool maps and preserves text conversation in the stub backend.",
-      "Quarantine persists across restarts and applies through verified parentID ancestry. Parallel approvals and other plugin instances cannot clear the local latch.",
-      "Other-instance quarantine cancels obsolete pending forms; local final release checks close asynchronous approval races.",
-      "Original results, errors, metadata and extension fields are replaced on refusal.",
-      "Optional Agent Monitor policies, trusted operator approval and execution permits are preserved. Incomplete permit/result observation remains fail-closed.",
-      "Strict versioned schemas reject mixed stub/monitor policies; illustrative requests and responses validate with regenerated bindings."
+      "Only the bound per-form random trust option value returns allow; all other structurally valid string replies return quarantine, including literal allow and displayed labels.",
+      "Form identity, immutable checkpoint binding, cancellation and cleanup checks are retained. Previous-form trust values cannot approve a later checkpoint.",
+      "The Desktop-rendered description includes warning, tool and bounded reason. custom=true allows the server to deliver arbitrary typed text to the plugin.",
+      "Existing classifier, Agent Monitor integration and quarantine enforcement are unchanged."
     ]
   },
   "limits": [
+    "OpenCode forms expose no input-origin metadata. Manually submitting the exact random trust value for the current form is indistinguishable from selecting its option. Ordinary typed text selects quarantine; Desktop blank input remains pending.",
     "The default classifier is still an always-deny stub; classifier unavailability fails open only outside an active quarantine.",
-    "The two native choices apply to backend=stub. Agent Monitor uses its own strict policy and trusted operator approval; native forms cannot override it.",
+    "The native choices and custom-text quarantine apply to backend=stub. Agent Monitor uses its own strict policy and trusted operator approval; native forms cannot override it.",
     "Already-running tools can finish; post quarantine cannot undo side effects. This plugin is not an OS sandbox.",
     "Tool removal is applied at context/generate/compaction hooks. Other plugins and actions outside local hooks are outside this enforcement guarantee; run the sensor last.",
     "A failed quarantine write keeps the current instance blocked but cannot guarantee persistence after restart.",
@@ -85,5 +53,14 @@
     "Native API integration tested; no manual Desktop/TUI visual click test.",
     "Noninteractive opencode run cancels native forms; use Desktop or interactive TUI for manual approval.",
     "Self-load failures before hook registration cannot be enforced by the plugin."
-  ]
+  ],
+  "previous_release_validation": {
+    "plugin_version": "0.4.0",
+    "source_commit": "18c61b829f70ef951525d5c7ec469381896a2283",
+    "bundle_sha256": "622eadf5bf3d1f5af0f105a7b0b3ac0673a8c05d2a867df1872edf09b1611509",
+    "passed": 19,
+    "native_forms_passed": 13,
+    "agent_monitor_passed": 6,
+    "note": "Historical checks, not rerun against 0.4.1. Current focused native cases cover the changed approval path. Agent Monitor and quarantine runtime are unchanged; current unit/component tests also cover them."
+  }
 }

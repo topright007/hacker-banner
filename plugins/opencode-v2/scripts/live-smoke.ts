@@ -13,7 +13,8 @@ import { Service } from "@opencode/client/service";
 // This tests the actual pinned OpenCode server through its native client APIs.
 // Noninteractive `opencode run` cancels native forms, so it cannot drive these approvals.
 // The deterministic local model does not measure classifier/model quality or UI rendering.
-type Scenario = "approve" | "reject-pre" | "reject-post" | "cancel-pre";
+type Scenario =
+  "approve" | "reject-pre" | "reject-post" | "cancel-pre" | "custom-pre" | "custom-post";
 type ToolKind = "shell" | "mcp" | "read-error" | "none";
 type Json = Record<string, any>;
 type Approval = {
@@ -23,6 +24,7 @@ type Approval = {
   binding_digest: string;
   session_id: string;
   tool: string;
+  allowValue: string;
 };
 type NativeClient = ReturnType<typeof OpenCode.make>;
 type ProcessState = { child: ChildProcess; exited: boolean; code: number | null; output: string };
@@ -33,7 +35,10 @@ const pluginPackage = resolve(process.env.SENSOR_PLUGIN_PACKAGE ?? packageDirect
 const stageTimeoutMs = Number(process.env.SMOKE_TIMEOUT_MS ?? 60_000);
 const pause = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 const quarantinesSession = (scenario: Scenario) =>
-  scenario === "reject-pre" || scenario === "reject-post";
+  scenario === "reject-pre" ||
+  scenario === "reject-post" ||
+  scenario === "custom-pre" ||
+  scenario === "custom-post";
 
 async function exists(path: string): Promise<boolean> {
   try {
@@ -94,19 +99,30 @@ async function pending(client: NativeClient, directory: string): Promise<Approva
     assert.equal(field.type, "string");
     assert.equal(field.required, true);
     assert.equal("default" in field, false, "Native approval must not have a default answer");
-    assert.ok(field.type === "string" && field.custom === false);
+    assert.ok(field.type === "string" && field.custom === true);
+    const allowValue = field.options?.[1]?.value;
+    assert.equal(typeof allowValue, "string");
+    assert.match(
+      allowValue!,
+      /^allow_[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/,
+    );
     assert.deepEqual(
       field.options?.map(({ value, label }) => ({ value, label })),
       [
         { value: "quarantine", label: "Продолжить в режиме карантина" },
-        { value: "allow", label: "Довериться и продолжить" },
+        { value: allowValue, label: "Довериться и продолжить" },
       ],
     );
     const description = field.description?.split("\n");
-    assert.equal(description?.length, 2, "Native warning should have exactly three visible lines");
-    assert.equal(JSON.parse(description![0].slice("Инструмент: ".length)), metadata.tool);
-    assert.match(description![1], /^Причина: /);
-    assert.ok(JSON.parse(description![1].slice("Причина: ".length)).includes("Тестовая заглушка"));
+    assert.equal(description?.length, 3, "Native warning should have exactly three visible lines");
+    assert.equal(
+      description![0],
+      detail.title,
+      "Desktop displays description instead of the field title",
+    );
+    assert.equal(JSON.parse(description![1].slice("Инструмент: ".length)), metadata.tool);
+    assert.match(description![2], /^Причина: /);
+    assert.ok(JSON.parse(description![2].slice("Причина: ".length)).includes("Тестовая заглушка"));
     result.push({
       id: form.id,
       request_id: metadata.request_id as string,
@@ -114,6 +130,7 @@ async function pending(client: NativeClient, directory: string): Promise<Approva
       binding_digest: metadata.binding_digest as string,
       session_id: form.sessionID,
       tool: metadata.tool as string,
+      allowValue: allowValue!,
     });
   }
   return result;
@@ -125,17 +142,42 @@ async function decide(
   decision: "allow" | "quarantine" | "cancel",
 ) {
   const input = { sessionID: approval.session_id, formID: approval.id };
+  const value = decision === "allow" ? approval.allowValue : decision;
   if (decision === "cancel") {
     await client.session.form.cancel(input, { signal: AbortSignal.timeout(2_000) });
   } else {
     await client.session.form.reply(
-      { ...input, answer: { decision } },
+      { ...input, answer: { decision: value } },
       { signal: AbortSignal.timeout(2_000) },
     );
   }
   const detail = await client.session.form.get(input, { signal: AbortSignal.timeout(2_000) });
   assert.equal(detail.state.status, decision === "cancel" ? "cancelled" : "answered");
-  if (detail.state.status === "answered") assert.deepEqual(detail.state.answer, { decision });
+  if (detail.state.status === "answered")
+    assert.deepEqual(detail.state.answer, { decision: value });
+}
+
+async function customReply(client: NativeClient, approval: Approval, value: string) {
+  assert.notEqual(
+    value,
+    approval.allowValue,
+    "Custom smoke reply must not contain the trust capability",
+  );
+  const input = { sessionID: approval.session_id, formID: approval.id };
+  // Deliberately bypass logical decision translation: this is exactly the raw
+  // string submitted by Desktop's custom-answer input.
+  await client.session.form.reply(
+    { ...input, answer: { decision: value } },
+    { signal: AbortSignal.timeout(2_000) },
+  );
+  const detail = await client.session.form.get(input, { signal: AbortSignal.timeout(2_000) });
+  assert.equal(
+    detail.state.status,
+    "answered",
+    "OpenCode rejected the custom answer before the plugin could quarantine it",
+  );
+  if (detail.state.status === "answered")
+    assert.deepEqual(detail.state.answer, { decision: value });
 }
 
 function assertQuarantineFeedback(
@@ -533,6 +575,11 @@ async function runScenario(
   if (brokenStartup) await writeFile(stateDirectory, "A file cannot be used as a state directory");
   const model = await mockModel(scenario, marker, nextMarker, followupMarker, sentinel, toolKind);
   let serverState: ProcessState | undefined;
+  const customScenario = scenario === "custom-pre" || scenario === "custom-post";
+  const observedExecutions: string[] = [];
+  const eventController = new AbortController();
+  let eventTask: Promise<void> | undefined;
+  let eventFailure: unknown;
   const completedOutput: string[] = [];
   let passed = false;
   try {
@@ -669,6 +716,21 @@ async function runScenario(
       model: { providerID: "sensor-smoke", id: "deterministic" },
       permissions: [{ action: "*", resource: "*", effect: "allow" }],
     });
+    if (customScenario) {
+      eventTask = (async () => {
+        try {
+          for await (const event of client.event.subscribe({ signal: eventController.signal })) {
+            const data = event.data as Json;
+            if (data.sessionID === session.id && event.type.startsWith("session.execution."))
+              observedExecutions.push(event.type);
+          }
+          if (!eventController.signal.aborted)
+            eventFailure = new Error("Native event stream ended early");
+        } catch (error) {
+          if (!eventController.signal.aborted) eventFailure = error;
+        }
+      })();
+    }
     const waitForTurn = async (completion: string) => {
       await client.session.wait(
         { sessionID: session.id },
@@ -792,8 +854,10 @@ async function runScenario(
 
     await assertAuditContext(stateDirectory, pre, `${scenario}/pre`);
 
-    if (scenario === "reject-pre" || scenario === "cancel-pre") {
-      await decide(client, pre, scenario === "cancel-pre" ? "cancel" : "quarantine");
+    if (scenario === "reject-pre" || scenario === "cancel-pre" || scenario === "custom-pre") {
+      if (scenario === "custom-pre")
+        await customReply(client, pre, "Хочу продолжить своим ответом");
+      else await decide(client, pre, scenario === "cancel-pre" ? "cancel" : "quarantine");
     } else {
       await decide(client, pre, "allow");
       const post = await poll(
@@ -811,6 +875,11 @@ async function runScenario(
         assert.ok(request.current_call.result.native.message.includes(sentinel));
       }
       assert.notEqual(post.request_id, pre.request_id, "Pre and post need separate requests");
+      assert.notEqual(
+        post.allowValue,
+        pre.allowValue,
+        "Each checkpoint needs a fresh trust capability",
+      );
       await assertAuditContext(stateDirectory, post, `${scenario}/post`);
       const requestCount = model.primaryRequests.length;
       const resultRequestCount = model.allRequests.filter((request) =>
@@ -829,7 +898,8 @@ async function runScenario(
         resultRequestCount,
         "Tool results reached a model request while the post approval was pending",
       );
-      await decide(client, post, scenario === "approve" ? "allow" : "quarantine");
+      if (scenario === "custom-post") await customReply(client, post, "allow");
+      else await decide(client, post, scenario === "approve" ? "allow" : "quarantine");
     }
 
     if (scenario === "cancel-pre") {
@@ -857,10 +927,20 @@ async function runScenario(
     if (scenario === "approve") {
       assert.equal(await exists(nextMarker), false);
       assert.equal(resultForwarded, true, "Approved result never reached the model");
-    } else if (scenario === "reject-pre" || scenario === "cancel-pre") {
+    } else if (
+      scenario === "reject-pre" ||
+      scenario === "cancel-pre" ||
+      scenario === "custom-pre"
+    ) {
       assert.equal(await exists(marker), false, "Rejected operation created its marker");
       assert.equal(resultForwarded, false, "Rejected pre call produced a private result");
-      assertQuarantineFeedback(forwardedResults, pre.tool, "pre", false, scenario === "reject-pre");
+      assertQuarantineFeedback(
+        forwardedResults,
+        pre.tool,
+        "pre",
+        false,
+        quarantinesSession(scenario),
+      );
     } else {
       assert.equal(resultForwarded, false, "Rejected post result reached the model");
       assertQuarantineFeedback(forwardedResults, pre.tool, "post", toolKind === "read-error");
@@ -921,6 +1001,27 @@ async function runScenario(
         false,
         "Quarantined private result resurfaced in the next user turn",
       );
+      if (customScenario) {
+        await poll(
+          "two successful native turns after custom-answer quarantine",
+          async () => {
+            if (eventFailure) throw eventFailure;
+            return observedExecutions.filter((type) => type === "session.execution.succeeded")
+              .length >= 2
+              ? true
+              : undefined;
+          },
+          state,
+        );
+        assert.ok(
+          !observedExecutions.includes("session.execution.interrupted"),
+          "Custom answer aborted the user's session",
+        );
+        assert.ok(
+          !observedExecutions.includes("session.execution.failed"),
+          "Custom answer failed the user's session",
+        );
+      }
     }
     if (scenario === "cancel-pre") {
       assert.equal(await readFile(nextMarker, "utf8"), "independent");
@@ -987,6 +1088,8 @@ async function runScenario(
     console.error(`Smoke artifacts retained at ${temporary}`);
     throw error;
   } finally {
+    eventController.abort();
+    if (eventTask) await eventTask;
     await stopProcess(serverState);
     await stopServer(model.server);
     if (passed && process.env.KEEP_SMOKE_ARTIFACTS !== "1")
@@ -1022,7 +1125,14 @@ assert.match(
   /^opencode v2\.0\.22(?:\s|$)/,
   "Live smoke requires the pinned OpenCode 2.0.22",
 );
-for (const scenario of ["approve", "reject-pre", "reject-post", "cancel-pre"] as const)
+for (const scenario of [
+  "approve",
+  "reject-pre",
+  "reject-post",
+  "cancel-pre",
+  "custom-pre",
+  "custom-post",
+] as const)
   await runScenario(scenario);
 
 for (const scenario of ["approve", "reject-post"] as const) await runScenario(scenario, "mcp");

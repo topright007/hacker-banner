@@ -10,13 +10,13 @@ execution until the classifier or the user permits the operation.
 Only V2 is maintained. V1 remains for reference and receives no further development
 or fixes. Use V2 for new installations.
 
-V2 release **0.4.0** uses classifier contract **2.3.0** for its default
+V2 release **0.4.1** uses classifier contract **2.3.0** for its default
 `backend: "stub"`. This always-deny local stub does not evaluate safety or send
 data to a service.
 
 In stub mode, warnings appear as native session forms inside Desktop 2.0.22 or the interactive
 terminal interface. They show only a warning, the tool name, and the reason, with
-exactly two choices:
+two predefined choices:
 
 1. **«Продолжить в режиме карантина»** — persist chat-only quarantine for this
    session and its descendants linked by `parentID`. Later tools are blocked
@@ -25,6 +25,12 @@ exactly two choices:
    parent-child inheritance.
 2. **«Довериться и продолжить»** — permit this bound checkpoint once. Pre and post
    approvals are independent, so the stub can ask again before releasing a result.
+
+Desktop 2.0.22 also displays a custom-answer option. Submitted free text selects
+quarantine, including words such as `allow` or the trust button's label. Each form
+uses an opaque per-form value for the actual trust option; the native API does not
+identify input origin, so manually submitting that exact value is indistinguishable
+from selecting the button. Blank input leaves the form pending.
 
 Post blocking replaces the complete result or error; completed side effects and
 already running external processes are not undone. Closing a form or a technical

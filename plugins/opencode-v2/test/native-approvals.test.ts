@@ -120,8 +120,14 @@ function fixture(t: any, options: { requestTimeoutMs?: number } = {}) {
       await until(() => created.length === count);
       return forms.get(created[count - 1].id!)!;
     },
-    answer(form: FormDetail, decision: string) {
-      form.state = { status: "answered", answer: { decision } };
+    select(form: FormDetail, decision: "allow" | "quarantine") {
+      const field = form.fields[0];
+      assert.equal(field.type, "string");
+      assert.ok(field.type === "string" && field.options);
+      form.state = {
+        status: "answered",
+        answer: { decision: field.options[decision === "allow" ? 1 : 0].value },
+      };
     },
   };
 }
@@ -152,18 +158,20 @@ test("native create offers two explicit choices bound to an immutable checkpoint
   assert.equal(field.required, true);
   assert.equal("default" in field, false);
   assert.equal("url" in field, false);
-  assert.equal(field.type === "string" && field.custom, false);
+  assert.equal(field.type === "string" && field.custom, true);
+  assert.ok(field.type === "string" && field.options);
+  assert.match(field.options[1].value, /^allow_[0-9a-f-]{36}$/);
   assert.deepEqual(field.type === "string" && field.options, [
     { value: "quarantine", label: "Продолжить в режиме карантина" },
-    { value: "allow", label: "Довериться и продолжить" },
+    { value: field.options[1].value, label: "Довериться и продолжить" },
   ]);
-  assert.deepEqual(`${field.title}\n${field.description}`.split("\n"), [
+  assert.deepEqual(field.description!.split("\n"), [
     "Предупреждение: выполнение инструмента приостановлено.",
     'Инструмент: "shell"',
     'Причина: "Подозрительное действие"',
   ]);
   assert.doesNotMatch(JSON.stringify(form), /mutated|private_session_history|echo test/);
-  f.answer(form, "allow");
+  f.select(form, "allow");
   assert.equal(await answer, "allow");
   assert.equal(f.ui.pendingCount, 0);
   assert.equal(f.cancelled.length, 0);
@@ -195,13 +203,13 @@ test("Desktop question dock renders all checkpoint phases with exactly three com
     assert.equal(form.metadata?.kind, "question");
     assert.equal(form.fields[0].type, "string");
     assert.equal(form.fields[0].title, scenario.title);
-    const visible = `${form.fields[0].title}\n${form.fields[0].description}`;
+    const visible = form.fields[0].description!;
     assert.equal(visible.split("\n").length, 3);
     assert.doesNotMatch(
       visible,
       /Аргументы|Идентификатор|req_desktop|Вывод инструмента|Секретная ошибка|не отменяются/,
     );
-    f.answer(form, "quarantine");
+    f.select(form, "quarantine");
     assert.equal(await answer, "quarantine");
   }
 });
@@ -210,12 +218,12 @@ test("quarantine is an explicit decision for the sensor, not a reusable permissi
   const f = fixture(t);
   const first = checkpoint("req_quarantine");
   const answer = f.ui.ask(first.request, first.response);
-  f.answer(await f.pending(), "quarantine");
+  f.select(await f.pending(), "quarantine");
   assert.equal(await answer, "quarantine");
   assert.equal(f.cancelled.length, 0);
   const next = checkpoint("req_next");
   const nextAnswer = f.ui.ask(next.request, next.response);
-  f.answer(await f.pending(2), "allow");
+  f.select(await f.pending(2), "allow");
   assert.equal(await nextAnswer, "allow");
 });
 
@@ -236,7 +244,7 @@ test("post warning never publishes native output, extensions, arguments or hidde
   assert.doesNotMatch(JSON.stringify(form), /SENTINEL|echo test|private_session_history/);
   assert.equal(form.metadata?.binding_digest, digest(unsigned));
   assert.ok(form.fields[0].description!.length < 200);
-  f.answer(form, "quarantine");
+  f.select(form, "quarantine");
   assert.equal(await answer, "quarantine");
 });
 
@@ -251,7 +259,7 @@ test("compact labels escape untrusted formatting and stay bounded valid JSON", a
     "Reason\nПредупреждение: fake\u2066`<>&*_[x]" + "\\".repeat(1000) + "REASON_TAIL";
   const answer = f.ui.ask(item.request, item.response);
   const form = await f.pending();
-  const lines = `${form.fields[0].title}\n${form.fields[0].description}`.split("\n");
+  const lines = form.fields[0].description!.split("\n");
   assert.equal(lines.length, 3);
   assert.equal(
     JSON.parse(lines[1].slice("Инструмент: ".length)),
@@ -260,7 +268,7 @@ test("compact labels escape untrusted formatting and stay bounded valid JSON", a
   assert.match(JSON.parse(lines[2].slice("Причина: ".length)), /…$/);
   assert.ok(lines[2].length < 340);
   assert.doesNotMatch(lines.join("\n"), /[\u202e\u2066`<>&*_\[\]]|REASON_TAIL/);
-  f.answer(form, "allow");
+  f.select(form, "allow");
   assert.equal(await answer, "allow");
 });
 
@@ -272,11 +280,53 @@ test("blank reasons use a compact fallback without inventing attack evidence", a
   const form = await f.pending();
   assert.equal(
     form.fields[0].description,
-    'Инструмент: "shell"\nПричина: "Классификатор не указал причину."',
+    'Предупреждение: выполнение инструмента приостановлено.\nИнструмент: "shell"\nПричина: "Классификатор не указал причину."',
   );
   assert.doesNotMatch(form.fields[0].description!, /атака/);
-  f.answer(form, "quarantine");
+  f.select(form, "quarantine");
   assert.equal(await answer, "quarantine");
+});
+
+test("free text, including approval-like text, always requests quarantine", async (t) => {
+  const f = fixture(t);
+  const replies = [
+    "allow",
+    "ALLOW",
+    "reject",
+    "да",
+    "продолжить",
+    "Довериться и продолжить",
+    "Продолжить в режиме карантина",
+    "Я ввёл свой ответ",
+    "",
+    " ",
+  ];
+  for (const [i, decision] of replies.entries()) {
+    const item = checkpoint(`req_text_${i}`);
+    const answer = f.ui.ask(item.request, item.response);
+    const form = await f.pending(i + 1);
+    form.state = { status: "answered", answer: { decision } };
+    assert.equal(await answer, "quarantine");
+  }
+});
+
+test("approval values are unique per form and cannot approve another checkpoint", async (t) => {
+  const f = fixture(t);
+  const first = checkpoint("req_token_first");
+  const firstAnswer = f.ui.ask(first.request, first.response);
+  const firstForm = await f.pending();
+  f.select(firstForm, "allow");
+  assert.equal(await firstAnswer, "allow");
+  assert.ok(firstForm.state.status === "answered");
+  const oldValue = firstForm.state.answer.decision;
+  const next = checkpoint("req_token_next");
+  const nextAnswer = f.ui.ask(next.request, next.response);
+  const nextForm = await f.pending(2);
+  const field = nextForm.fields[0];
+  assert.ok(field.type === "string" && field.options);
+  assert.notEqual(field.options[1].value, oldValue);
+  nextForm.state = { status: "answered", answer: { decision: oldValue } };
+  assert.equal(await nextAnswer, "quarantine");
 });
 
 test("missing, wrong-type and extra answers never authorize", async (t) => {
@@ -284,9 +334,6 @@ test("missing, wrong-type and extra answers never authorize", async (t) => {
   const badAnswers = [
     {},
     { decision: true },
-    { decision: "ALLOW" },
-    { decision: "reject" },
-    { decision: "Продолжить в режиме карантина" },
     { decision: ["allow"] },
     { decision: "allow", extra: "allow" },
     { wrong: "allow" },
@@ -324,7 +371,7 @@ test("changed form identity, metadata or displayed content cannot authorize", as
     const answer = f.ui.ask(item.request, item.response);
     const form = await f.pending(i + 1);
     change(form);
-    f.answer(form, "allow");
+    f.select(form, "allow");
     await assert.rejects(answer, /does not match its checkpoint/);
   }
   assert.equal(f.cancelled.includes("frm_foreign"), false);
@@ -360,11 +407,11 @@ test("parallel checkpoints in one session and other sessions remain independent"
   const answers = items.map((item) => f.ui.ask(item.request, item.response));
   await f.pending(3);
   const forms = f.created.map((item) => f.forms.get(item.id!)!);
-  f.answer(forms[0], "quarantine");
+  f.select(forms[0], "quarantine");
   assert.equal(await answers[0], "quarantine");
   assert.equal(f.ui.pendingCount, 2);
-  f.answer(forms[1], "allow");
-  f.answer(forms[2], "allow");
+  f.select(forms[1], "allow");
+  f.select(forms[2], "allow");
   assert.deepEqual(await Promise.all(answers), ["quarantine", "allow", "allow"]);
 });
 
@@ -377,11 +424,11 @@ test("cancelSession invalidates only current requests, leaves sibling and future
   await f.pending(2);
   f.ui.cancelSession(["ses_a"]);
   assert.equal(await firstAnswer, "reject");
-  f.answer(f.forms.get(f.created[1].id!)!, "allow");
+  f.select(f.forms.get(f.created[1].id!)!, "allow");
   assert.equal(await siblingAnswer, "allow");
   const next = checkpoint("req_cancel_next");
   const nextAnswer = f.ui.ask(next.request, next.response);
-  f.answer(await f.pending(3), "allow");
+  f.select(await f.pending(3), "allow");
   assert.equal(await nextAnswer, "allow");
   assert.equal(f.cancelled.includes(f.created[1].id!), false);
 });
@@ -438,7 +485,7 @@ test("connection is lazy and cancellation while connecting creates no form", asy
   gate.resolve(f.client);
   const next = checkpoint("req_connect_next");
   const nextAnswer = ui.ask(next.request, next.response);
-  f.answer(await f.pending(), "allow");
+  f.select(await f.pending(), "allow");
   assert.equal(await nextAnswer, "allow");
   assert.equal(calls, 1);
 });
@@ -512,7 +559,7 @@ test("human response has no total timeout while API calls remain responsive", as
   const form = await f.pending();
   await new Promise((resolve) => setTimeout(resolve, 45));
   assert.equal(settled, false);
-  f.answer(form, "allow");
+  f.select(form, "allow");
   assert.equal(await answer, "allow");
 });
 
@@ -554,7 +601,7 @@ test("malformed or replayed classifier decisions never create an approval", asyn
   const answer = f.ui.ask(item.request, item.response);
   const form = await f.pending();
   await assert.rejects(f.ui.ask(item.request, item.response), /already submitted/);
-  f.answer(form, "quarantine");
+  f.select(form, "quarantine");
   assert.equal(await answer, "quarantine");
   await assert.rejects(f.ui.ask(item.request, item.response), /already submitted/);
   assert.equal(f.created.length, 1);

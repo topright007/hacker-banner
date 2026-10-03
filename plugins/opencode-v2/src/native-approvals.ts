@@ -21,6 +21,7 @@ type Options = {
 type Decision = "allow" | "quarantine" | "reject";
 type Pending = {
   form: SessionFormCreateInput & { id: string };
+  allowValue: string;
   controller: AbortController;
   generation: number;
   finished: boolean;
@@ -49,7 +50,11 @@ function preview(value: unknown, limit: number, fallback = "Не указано"
   return `"${safe}"`;
 }
 
-function formFor(request: ClassifierRequest, response: ClassifierResponse): Pending["form"] {
+function formFor(
+  request: ClassifierRequest,
+  response: ClassifierResponse,
+  allowValue: string,
+): Pending["form"] {
   const pre = request.phase === "pre_tool_call";
   const failed = request.current_call.result?.format === "v2_tool_error";
   const outcome = failed ? "ошибка" : "результат";
@@ -58,6 +63,7 @@ function formFor(request: ClassifierRequest, response: ClassifierResponse): Pend
     : `Предупреждение: инструмент выполнен; ${outcome} удерживается.`;
   const tool = preview(request.current_call.tool_name, 160, "Название недоступно");
   const description = [
+    warning,
     `Инструмент: ${tool}`,
     `Причина: ${preview(response.reason, 320, "Классификатор не указал причину.")}`,
   ].join("\n");
@@ -79,18 +85,20 @@ function formFor(request: ClassifierRequest, response: ClassifierResponse): Pend
       {
         key: "decision",
         type: "string",
-        // Desktop renders the field title; the form title alone is not shown.
+        // Desktop 2.0.22 shows description ?? title, so description includes the warning.
         title: warning,
         description,
         required: true,
-        custom: false,
+        // Desktop shows free input even with custom:false, but the server rejects
+        // such replies before we can quarantine. Accept them and classify below.
+        custom: true,
         options: [
           {
             value: "quarantine",
             label: "Продолжить в режиме карантина",
           },
           {
-            value: "allow",
+            value: allowValue,
             label: "Довериться и продолжить",
           },
         ],
@@ -180,8 +188,12 @@ export class NativeApprovalUI implements ApprovalUI {
       throw new Error("Approval request was already submitted");
     if (this.pending.size >= MAX_PENDING) throw new Error("Too many pending approval requests");
     this.usedRequestIDs.add(snapshot.request_id);
+    // Native forms do not identify typed answers separately from selected values.
+    // Avoid interpreting ordinary text such as "allow" as explicit approval.
+    const allowValue = `allow_${randomUUID()}`;
     const item: Pending = {
-      form: formFor(snapshot, classification),
+      form: formFor(snapshot, classification, allowValue),
+      allowValue,
       controller: new AbortController(),
       generation,
       finished: false,
@@ -221,13 +233,9 @@ export class NativeApprovalUI implements ApprovalUI {
         if (current.state?.status === "answered") {
           terminal = true;
           const answer = current.state.answer;
-          if (
-            !answer ||
-            Object.keys(answer).length !== 1 ||
-            !["allow", "quarantine"].includes(answer.decision as string)
-          )
+          if (!answer || Object.keys(answer).length !== 1 || typeof answer.decision !== "string")
             throw new Error("Native approval answer is invalid");
-          return answer.decision as Decision;
+          return answer.decision === item.allowValue ? "allow" : "quarantine";
         }
         if (current.state?.status === "cancelled") {
           terminal = true;
