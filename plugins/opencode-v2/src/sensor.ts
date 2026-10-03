@@ -10,6 +10,7 @@ import { createNativeFormsClient } from "./native-client.js";
 import { AuditLog } from "./audit.js";
 import { QuarantineStore } from "./quarantine-store.js";
 import { denyAllClassifier, type Classifier } from "./classifier.js";
+import { createJevClassifier } from "./jev.js";
 import { ContextCollector } from "./collector.js";
 import { ActionRejectedError, quarantineMessage, type QuarantineCause } from "./gates.js";
 import { Error as ToolError } from "@opencode/plugin/promise/tool";
@@ -27,7 +28,9 @@ import {
 } from "./protocol.js";
 
 export interface SensorOptions extends MonitorOptions {
-  backend?: "stub" | "agent_monitor";
+  backend?: "stub" | "jev" | "agent_monitor";
+  /** JEV bearer token; overrides the JEV_API_TOKEN environment variable. */
+  jevToken?: string;
   enabled?: boolean;
   stateDirectory?: string;
   /** Existing OpenCode server; managed service discovery is used when omitted. */
@@ -102,9 +105,11 @@ export async function createSensor(
     : new Error("Sensor options must be an object");
   if (options.enabled !== undefined && typeof options.enabled !== "boolean")
     startupFailure = new Error("Sensor enabled must be boolean");
+  if (options.jevToken !== undefined && options.backend !== "jev")
+    startupFailure = new Error("jevToken requires backend=jev");
   const monitorMode = options.backend === "agent_monitor";
-  if (options.backend !== undefined && !["stub", "agent_monitor"].includes(options.backend))
-    startupFailure = new Error("Sensor backend must be stub or agent_monitor");
+  if (options.backend !== undefined && !["stub", "jev", "agent_monitor"].includes(options.backend))
+    startupFailure = new Error("Sensor backend must be stub, jev or agent_monitor");
   if (!monitorMode && (options.monitorCredentials !== undefined || options.toolMap !== undefined))
     startupFailure = new Error("Monitor options require backend=agent_monitor");
   let monitor: MonitorBackend | undefined;
@@ -116,7 +121,10 @@ export async function createSensor(
   let classifierTimeoutMs = 3000;
   try {
     apiTimeoutMs = milliseconds(options.apiTimeoutMs, 5000);
-    classifierTimeoutMs = milliseconds(options.classifierTimeoutMs, 3000);
+    classifierTimeoutMs = milliseconds(
+      options.classifierTimeoutMs,
+      options.backend === "jev" ? 10000 : 3000,
+    );
   } catch (error) {
     startupFailure = error;
   }
@@ -147,7 +155,13 @@ export async function createSensor(
   );
   const quarantinedHere = new Set<string>();
   const parents = new Map<string, string | null>();
-  const classifier = dependencies.classifier ?? denyAllClassifier;
+  let classifier = dependencies.classifier ?? denyAllClassifier;
+  try {
+    if (options.backend === "jev" && !dependencies.classifier)
+      classifier = createJevClassifier({ token: options.jevToken });
+  } catch (error) {
+    startupFailure = error;
+  }
   let sequence = 0;
   let closed = false;
   type Invocation = { token: symbol; observedAt: number; sessionID: string; cancelled: boolean };
@@ -981,7 +995,9 @@ export async function createSensor(
     notify(
       monitor
         ? "Agent Monitor подключён: политика, разрешения и execution permits контролируются сервисом."
-        : "Заглушка классификатора включена: каждый pre/post требует подтверждения внутри OpenCode. Браузерная панель не используется.",
+        : options.backend === "jev"
+          ? "JEV подключён через Eliza: полный доступный контекст; карантин при вероятности атаки >80%."
+          : "Заглушка классификатора включена: каждый pre/post требует подтверждения внутри OpenCode. Браузерная панель не используется.",
       "info",
     );
   return hooks;

@@ -1667,3 +1667,133 @@ test("quarantine before a monitor post report withholds results and poisons inco
     }
   }
 });
+
+for (const probability of [0.8, 0.81]) {
+  test(`JEV backend selection routes ${probability} through native pre/post quarantine`, async (t) => {
+    const oldToken = process.env.JEV_API_TOKEN;
+    process.env.JEV_API_TOKEN = "jev-integration-test";
+    const bodies: any[] = [];
+    t.mock.method(globalThis, "fetch", async (url: any, options: any) => {
+      if (String(url).endsWith("/models"))
+        return Response.json({
+          models: [
+            {
+              model_version: "typesafe/jev-1.13",
+              handle: "/openrouter/alpha/decisions",
+            },
+          ],
+        });
+      bodies.push(JSON.parse(options.body));
+      return Response.json({
+        response: {
+          answers: { hacker_attack: { type: "noul", noul: probability } },
+        },
+      });
+    });
+    const f = await setup(undefined, new UI(), {
+      backend: "jev",
+      classifierTimeoutMs: 1000,
+    });
+    try {
+      await f.hooks["session.context"](modelContext());
+      const before = f.hooks["tool.execute.before"](structuredClone(input));
+      if (probability > 0.8) {
+        await pending(f.ui, 1);
+        f.ui.pending[0].resolve("allow");
+      }
+      await before;
+      const output = post();
+      const original = structuredClone(output.result);
+      const after = f.hooks["tool.execute.after"](output);
+      if (probability > 0.8) {
+        await pending(f.ui, 2);
+        f.ui.pending[1].resolve("quarantine");
+      }
+      await after;
+      assert.equal(bodies.length, 2);
+      assert.equal(bodies[1].state.snapshot.phase, "post_tool_call");
+      assert.equal(bodies[1].state.snapshot.contract_version, "2.3.0");
+      assert.deepEqual(bodies[1].state.snapshot.current_call.result.native, original);
+      assert.ok(
+        bodies[1].state.trust_annotations.some(
+          (a: any) => a.kind === "system_prompt" && a.trust === "trusted",
+        ),
+      );
+      if (probability > 0.8) {
+        assert.match(String(output.result.content), /JEV: вероятность хакерской атаки 81%/);
+        assert.ok(!JSON.stringify(output.result).includes("untrusted tool content"));
+        await assert.rejects(
+          f.hooks["tool.execute.before"](structuredClone(input)),
+          (error: unknown) =>
+            error instanceof ActionRejectedError && error.quarantineCause === "session_quarantined",
+        );
+        assert.equal(f.ui.pending.length, 2);
+        assert.equal(bodies.length, 2);
+        await f.hooks["session.context"](modelContext());
+      } else {
+        assert.deepEqual(output.result, original);
+        assert.equal(f.ui.pending.length, 0);
+      }
+    } finally {
+      await f.cleanup();
+      if (oldToken === undefined) delete process.env.JEV_API_TOKEN;
+      else process.env.JEV_API_TOKEN = oldToken;
+    }
+  });
+}
+
+test("JEV without a token retains blocking startup hooks", async () => {
+  const oldToken = process.env.JEV_API_TOKEN;
+  delete process.env.JEV_API_TOKEN;
+  const f = await setup(undefined, new UI(), { backend: "jev" });
+  try {
+    await assert.rejects(f.hooks["tool.execute.before"](structuredClone(input)), /Сенсор не готов/);
+    assert.equal(f.ui.pending.length, 0);
+  } finally {
+    await f.cleanup();
+    if (oldToken !== undefined) process.env.JEV_API_TOKEN = oldToken;
+  }
+});
+
+test("JEV config token overrides environment and stays out of context and audit", async (t) => {
+  const oldToken = process.env.JEV_API_TOKEN;
+  process.env.JEV_API_TOKEN = "environment-token-not-used";
+  const configuredToken = "configured-token-private";
+  let calls = 0;
+  t.mock.method(globalThis, "fetch", async (url: any, options: any) => {
+    calls++;
+    assert.equal(options.headers.Authorization, `Bearer ${configuredToken}`);
+    if (String(url).endsWith("/models"))
+      return Response.json({
+        models: [{ model_version: "typesafe/jev-1.13", handle: "/openrouter/alpha/decisions" }],
+      });
+    assert.ok(!options.body.includes(configuredToken));
+    assert.ok(!options.body.includes("environment-token-not-used"));
+    return Response.json({ response: { answers: { hacker_attack: { type: "noul", noul: 0.1 } } } });
+  });
+  const f = await setup(
+    undefined,
+    new UI(),
+    { backend: "jev", jevToken: configuredToken },
+    ({ ctx }) => {
+      ctx.options = { backend: "jev", jevToken: configuredToken };
+      ctx.plugin.list = async () => ({ data: [{ id: "sensor", options: ctx.options }] });
+    },
+  );
+  try {
+    await f.hooks["session.context"](modelContext());
+    await f.hooks["tool.execute.before"](structuredClone(input));
+    assert.equal(calls, 2);
+    for (const file of await readdir(join(f.directory, "requests"))) {
+      const data = await readFile(join(f.directory, "requests", file), "utf8");
+      assert.ok(!data.includes(configuredToken));
+      assert.ok(!data.includes("environment-token-not-used"));
+    }
+    const decisions = await readFile(join(f.directory, "decisions.jsonl"), "utf8");
+    assert.ok(!decisions.includes(configuredToken));
+  } finally {
+    await f.cleanup();
+    if (oldToken === undefined) delete process.env.JEV_API_TOKEN;
+    else process.env.JEV_API_TOKEN = oldToken;
+  }
+});

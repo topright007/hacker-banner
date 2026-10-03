@@ -5,7 +5,7 @@ export type Classifier = (
   signal: AbortSignal,
 ) => Promise<ClassifierResponse>;
 
-/** Replace this adapter with an HTTP client when the real classifier is ready. */
+/** Local test backend. The Eliza/JEV HTTP adapter is in jev.ts. */
 export const denyAllClassifier: Classifier = async (request, signal) => {
   signal.throwIfAborted();
   return responseFor(request, {
