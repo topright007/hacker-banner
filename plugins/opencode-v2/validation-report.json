@@ -1,5 +1,5 @@
 {
-  "plugin_version": "0.4.1",
+  "plugin_version": "0.4.2",
   "contract_version": "2.3.0",
   "contract_versions": {
     "stub": "2.3.0",
@@ -9,8 +9,8 @@
   "opencode_version": "2.0.22",
   "node_version": "v24.19.0",
   "platform": "darwin arm64",
-  "validated_at": "2026-10-03T12:15:04.948169+00:00",
-  "change": "Submitted custom native-form text activates existing persistent chat-only quarantine. Per-form trust values prevent ordinary approval-like text from allowing. Desktop descriptions include the warning. Classifier and Agent Monitor implementations unchanged.",
+  "validated_at": "2026-10-03T12:29:07.314Z",
+  "change": "Native approval forms now show the fixed text «Зафиксирована хакерская атака. Выберите возможные варианты действий» and options «Продолжить в режиме карантина» / «Принять риски и продолжить». Tool names and classifier reasons are not displayed in the approval form. Classifier integration, Agent Monitor, custom-answer quarantine and tool-error feedback behavior are unchanged.",
   "build": "passed",
   "typecheck": "passed",
   "format_check": "passed",
@@ -18,31 +18,26 @@
     "passed": 130,
     "failed": 0
   },
-  "tested_bundle_sha256": "ddc1a31c9dd92121986d4500e5c9af4e0175cc0a743761eba9fa672886b6f591",
+  "tested_bundle_sha256": "080a261fe1bc927a662df3c1f7860e77077e2b4d14037ab48df157c791ac6a76",
   "packaged_live_tests": {
     "status": "passed",
     "passed": 4,
     "failed": 0,
-    "installation": "Standalone immutable release-layout packages without node_modules; actual pinned OpenCode 2.0.22; no external LLM",
+    "installation": "Standalone immutable release-layout package without node_modules, copied from the current 0.4.2 bundle; actual pinned OpenCode 2.0.22 and a local deterministic model; no external LLM",
     "native_forms": {
       "passed": 4,
       "scenarios": ["shell/approve", "shell/cancel-pre", "shell/custom-pre", "shell/custom-post"],
+      "approval_copy": "The live form assertions verify the new fixed warning and option labels, without displaying tool names or classifier reasons.",
       "custom_answers": "Actual form.reply accepts Russian free text at pre and literal allow at post. Both activate quarantine; continuation and next user turn have no tools or additional approvals; two native execution.succeeded events and no interrupted/failed events per custom case."
     },
     "interaction": "Native session/form APIs and local deterministic model; visual UI clicks not automated"
   },
   "review": {
-    "status": "focused independent source review of native approval change; no consequential defects reported",
-    "verified": [
-      "Only the bound per-form random trust option value returns allow; all other structurally valid string replies return quarantine, including literal allow and displayed labels.",
-      "Form identity, immutable checkpoint binding, cancellation and cleanup checks are retained. Previous-form trust values cannot approve a later checkpoint.",
-      "The Desktop-rendered description includes warning, tool and bounded reason. custom=true allows the server to deliver arbitrary typed text to the plugin.",
-      "Existing classifier, Agent Monitor integration and quarantine enforcement are unchanged."
-    ]
+    "status": "No new independent source review for 0.4.2; the prior native-approval review is retained below as historical evidence. Current release checks are typecheck, build, formatting, 130 unit/component tests and four native API live scenarios."
   },
   "limits": [
     "OpenCode forms expose no input-origin metadata. Manually submitting the exact random trust value for the current form is indistinguishable from selecting its option. Ordinary typed text selects quarantine; Desktop blank input remains pending.",
-    "The default classifier is still an always-deny stub; classifier unavailability fails open only outside an active quarantine.",
+    "The default classifier is still an always-deny stub. The fixed attack warning is interface copy, not evidence of an actual detected attack; classifier unavailability fails open only outside active quarantine.",
     "The native choices and custom-text quarantine apply to backend=stub. Agent Monitor uses its own strict policy and trusted operator approval; native forms cannot override it.",
     "Already-running tools can finish; post quarantine cannot undo side effects. This plugin is not an OS sandbox.",
     "Tool removal is applied at context/generate/compaction hooks. Other plugins and actions outside local hooks are outside this enforcement guarantee; run the sensor last.",
@@ -61,6 +56,37 @@
     "passed": 19,
     "native_forms_passed": 13,
     "agent_monitor_passed": 6,
-    "note": "Historical checks, not rerun against 0.4.1. Current focused native cases cover the changed approval path. Agent Monitor and quarantine runtime are unchanged; current unit/component tests also cover them."
+    "note": "Historical 0.4.0 checks, not rerun against 0.4.2. Current focused native cases cover the changed approval path. Agent Monitor runtime is unchanged; current unit/component tests cover it, but its six live scenarios were not rerun for this release."
+  },
+  "previous_native_form_validation": {
+    "plugin_version": "0.4.1",
+    "validated_at": "2026-10-03T12:15:04.948169+00:00",
+    "bundle_sha256": "ddc1a31c9dd92121986d4500e5c9af4e0175cc0a743761eba9fa672886b6f591",
+    "unit_and_component_tests": {
+      "passed": 130,
+      "failed": 0
+    },
+    "packaged_live_tests": {
+      "status": "passed",
+      "passed": 4,
+      "failed": 0,
+      "installation": "Standalone immutable release-layout packages without node_modules; actual pinned OpenCode 2.0.22; no external LLM",
+      "native_forms": {
+        "passed": 4,
+        "scenarios": ["shell/approve", "shell/cancel-pre", "shell/custom-pre", "shell/custom-post"],
+        "custom_answers": "Actual form.reply accepts Russian free text at pre and literal allow at post. Both activate quarantine; continuation and next user turn have no tools or additional approvals; two native execution.succeeded events and no interrupted/failed events per custom case."
+      },
+      "interaction": "Native session/form APIs and local deterministic model; visual UI clicks not automated"
+    },
+    "review": {
+      "status": "focused independent source review of native approval change; no consequential defects reported",
+      "verified": [
+        "Only the bound per-form random trust option value returns allow; all other structurally valid string replies return quarantine, including literal allow and displayed labels.",
+        "Form identity, immutable checkpoint binding, cancellation and cleanup checks are retained. Previous-form trust values cannot approve a later checkpoint.",
+        "The Desktop-rendered description includes warning, tool and bounded reason. custom=true allows the server to deliver arbitrary typed text to the plugin.",
+        "Existing classifier, Agent Monitor integration and quarantine enforcement are unchanged."
+      ]
+    },
+    "note": "Historical 0.4.1 evidence. The current 0.4.2 checks are reported separately above; this history is not added to current test counts."
   }
 }

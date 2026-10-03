@@ -10,7 +10,7 @@ execution until the classifier or the user permits the operation.
 Only V2 is maintained. V1 remains for reference and receives no further development
 or fixes. Use V2 for new installations.
 
-V2 release **0.4.1** uses classifier contract **2.3.0** for its default
+V2 release **0.4.2** uses classifier contract **2.3.0** for its default
 `backend: "stub"`. This always-deny local stub does not evaluate safety or send
 data to a service.
 

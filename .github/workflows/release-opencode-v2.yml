@@ -1,0 +1,83 @@
+name: Release OpenCode V2 plugin
+
+on:
+  push:
+    tags:
+      - opencode-v2-v*
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: plugins/opencode-v2
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.19.0
+          package-manager-cache: false
+      - name: Verify release version
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          version=$(node -p 'JSON.parse(require("fs").readFileSync("package.json", "utf8")).version')
+          test "$RELEASE_TAG" = "opencode-v2-v$version"
+          test -f "$GITHUB_WORKSPACE/.github/release-notes/$RELEASE_TAG.md"
+          echo "PLUGIN_VERSION=$version" >> "$GITHUB_ENV"
+      - name: Install locked dependencies
+        run: |
+          npm install --global pnpm@11.19.0
+          pnpm install --frozen-lockfile
+      - name: Validate and build
+        run: |
+          pnpm run format:check
+          pnpm test
+          pnpm build
+          node --input-type=module <<'JS'
+          import assert from "node:assert/strict";
+          import { readFileSync } from "node:fs";
+          import { createHash } from "node:crypto";
+          const report = JSON.parse(readFileSync("validation-report.json", "utf8"));
+          const hash = createHash("sha256").update(readFileSync("dist/index.js")).digest("hex");
+          assert.equal(report.plugin_version, process.env.PLUGIN_VERSION);
+          assert.equal(hash, report.tested_bundle_sha256, "Release bundle differs from the locally verified bundle");
+          JS
+      - name: Package verified ZIP
+        run: |
+          destination="$RUNNER_TEMP/opencode-sensor-v2-$PLUGIN_VERSION"
+          node scripts/package-release.mjs "$destination"
+          cd "$destination"
+          sha256sum --check SHA256SUMS
+          unzip -t "$destination.zip"
+          node --input-type=module <<'JS'
+          import assert from "node:assert/strict";
+          import { readFileSync } from "node:fs";
+          const build = JSON.parse(readFileSync("BUILD.json", "utf8"));
+          assert.equal(build.source_commit, process.env.GITHUB_SHA);
+          assert.equal(build.source_dirty, false);
+          JS
+          cd "$RUNNER_TEMP"
+          sha256sum "opencode-sensor-v2-$PLUGIN_VERSION.zip" > "opencode-sensor-v2-$PLUGIN_VERSION.zip.sha256"
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          archive="$RUNNER_TEMP/opencode-sensor-v2-$PLUGIN_VERSION.zip"
+          gh release create "$RELEASE_TAG" "$archive" "$archive.sha256" \
+            --repo "$GITHUB_REPOSITORY" --verify-tag --draft \
+            --title "OpenCode Sensor V2 $PLUGIN_VERSION" \
+            --notes-file "$GITHUB_WORKSPACE/.github/release-notes/$RELEASE_TAG.md"
+          gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest
