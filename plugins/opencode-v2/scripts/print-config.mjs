@@ -6,7 +6,9 @@ process.stdout.write(
   JSON.stringify(
     {
       $schema: "https://opencode.ai/config.json",
-      plugins: [{ package: pathToFileURL(root).href, options: { openBrowser: true } }],
+      plugins: [
+        { package: pathToFileURL(root).href, options: { enabled: true, openBrowser: true } },
+      ],
     },
     null,
     2,

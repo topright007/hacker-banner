@@ -614,3 +614,85 @@ test("overlapping identical CodeMode calls keep both pre timestamps ambiguous", 
     await f.cleanup();
   }
 });
+
+test("enabled false is a no-op before SDK, version, options, services or state access", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "sensor-v2-disabled-"));
+  const forbidden = new Proxy(
+    {},
+    {
+      get() {
+        throw new Error("Disabled sensor accessed a dependency");
+      },
+    },
+  );
+  try {
+    const hooks = await createSensor(
+      forbidden as any,
+      {
+        enabled: false,
+        stateDirectory: join(directory, "never-created"),
+        classifierTimeoutMs: -1,
+        openBrowser: "invalid while disabled",
+      },
+      forbidden as any,
+    );
+    assert.deepEqual(Object.keys(hooks), ["dispose"]);
+    await hooks.dispose();
+    await hooks.dispose();
+    assert.deepEqual(await readdir(directory), []);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("explicit enabled true retains the default classifier approval path", async () => {
+  const f = await setup(undefined, new UI(), { enabled: true });
+  try {
+    const before = f.hooks["tool.execute.before"](structuredClone(input));
+    await pending(f.ui, 1);
+    assert.ok(f.registered.has("session.model.request"));
+    f.ui.pending[0].resolve("allow");
+    await before;
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("invalid enabled values never disable registered enforcement", async () => {
+  for (const enabled of ["false", "true", 0, 1, null]) {
+    const f = await setup(undefined, new UI(), { enabled: enabled as any });
+    try {
+      assert.ok(f.registered.has("tool.execute.before"));
+      await assert.rejects(
+        f.hooks["tool.execute.before"](structuredClone(input)),
+        SessionBlockedError,
+      );
+      assert.equal(f.ui.pending.length, 0);
+    } finally {
+      await f.cleanup();
+    }
+  }
+});
+
+test("scalar, array and null options fail closed rather than bypassing setup", async () => {
+  for (const options of [false, "false", 0, [], null]) {
+    const f = fixtureContext();
+    const ui = new UI();
+    let serviceStarts = 0;
+    ui.start = async () => {
+      serviceStarts++;
+    };
+    const hooks = await createSensor(f.ctx, options, { approvals: ui });
+    try {
+      assert.ok(f.registered.has("tool.execute.before"));
+      await assert.rejects(
+        hooks["tool.execute.before"](structuredClone(input)),
+        SessionBlockedError,
+      );
+      assert.equal(serviceStarts, 0);
+      assert.equal(ui.pending.length, 0);
+    } finally {
+      await hooks.dispose();
+    }
+  }
+});

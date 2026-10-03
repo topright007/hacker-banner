@@ -40,7 +40,10 @@ await writeFile(
     {
       $schema: "https://opencode.ai/config.json",
       plugins: [
-        { package: "/ABSOLUTE/PATH/opencode-sensor-v2-0.1.0", options: { openBrowser: true } },
+        {
+          package: `/ABSOLUTE/PATH/opencode-sensor-v2-${pkg.version}`,
+          options: { enabled: true, openBrowser: true },
+        },
       ],
     },
     null,

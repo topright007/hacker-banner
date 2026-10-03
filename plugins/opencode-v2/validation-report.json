@@ -1,14 +1,14 @@
 {
-  "generated_at": "2026-10-03T09:43:47.536079+00:00",
+  "generated_at": "2026-10-03T09:49:45.071699+00:00",
   "harness": "OpenCode 2.0.22",
   "plugin_api": "@opencode/plugin@2.0.22",
   "contract_version": "2.0.0",
   "unit_component": {
-    "passed": 44,
+    "passed": 48,
     "failed": 0,
     "groups": {
       "collector": 7,
-      "sensor": 17,
+      "sensor": 21,
       "approval_ui": 20
     }
   },
@@ -16,7 +16,7 @@
   "build": "passed",
   "format": "passed",
   "live_smoke": {
-    "passed": 8,
+    "passed": 10,
     "failed": 0,
     "runtime": "actual pinned @opencode/cli@2.0.22",
     "model": "local deterministic OpenAI-compatible fixture; no real external LLM",
@@ -28,18 +28,21 @@
       "MCP with codemode=false: reject post blocks model result",
       "Tool.Error: allow pre and post forwards error",
       "Tool.Error: reject post blocks forwarding",
-      "startup: state directory is a regular file, registered hooks block model/tool execution"
+      "startup: state directory is a regular file, registered hooks block model/tool execution",
+      "enabled protection: text-only model reply completes without tool checkpoints",
+      "enabled=false: tool executes and result reaches model, no sensor state/UI created"
     ]
   },
   "packaged_live_smoke": {
     "status": "passed",
-    "passed": 8,
+    "passed": 2,
     "failed": 0,
-    "installation": "Extracted ZIP in fresh directory without plugin node_modules, root index.js and ESM manifest; same eight live scenarios",
-    "sha256_checksums": "all extracted files matched SHA256SUMS"
+    "scenarios": ["text-only enabled", "disabled model and tools"],
+    "installation": "Fresh extracted ZIP without plugin node_modules",
+    "sha256_checksums": "all matched"
   },
   "review": {
-    "status": "completed; no unresolved consequential findings in implemented boundaries",
+    "status": "completed; no unresolved findings in enabled flag, defaults, invalid options and documentation",
     "fixed_findings": [
       "Invalid Unicode before correlation-key creation now latches session tree",
       "Overlapping identical CodeMode calls keep ambiguous pre timestamps null until all finish",
@@ -53,5 +56,6 @@
     "Already-running parallel tools may finish. Latches and observed history are not restored across plugin restarts.",
     "Self-load failures before critical hook registration cannot be blocked by this plugin."
   ],
-  "tested_bundle_sha256": "1716ddfff4f30b2fb1b20db4f1375b0cf462df93f6fc5a6626afd8c3b2f5baec"
+  "tested_bundle_sha256": "f594a4fbca3db4b82d8d1248196e819fb8c1833636bf76382f72b01e7edf464c",
+  "plugin_version": "0.1.1"
 }

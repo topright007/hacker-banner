@@ -22,6 +22,7 @@ import {
 } from "./protocol.js";
 
 export interface SensorOptions {
+  enabled?: boolean;
   stateDirectory?: string;
   openBrowser?: boolean;
   apiTimeoutMs?: number;
@@ -68,12 +69,29 @@ function toolOutput(phase: Phase, event: Native): Native | null {
 
 export async function createSensor(
   ctx: SensorInput,
-  options: SensorOptions = {},
+  suppliedOptions: unknown = {},
   dependencies: SensorDependencies = {},
-) {
+): Promise<Record<string, any>> {
+  const validOptions =
+    suppliedOptions !== null &&
+    typeof suppliedOptions === "object" &&
+    !Array.isArray(suppliedOptions);
+  const options = validOptions ? (suppliedOptions as SensorOptions) : {};
+  // An explicit boolean false is the only off switch. Exit before reading the
+  // harness context or initializing any collector, hooks, state, or service.
+  if (validOptions && Object.hasOwn(options, "enabled") && options.enabled === false) {
+    process.stderr.write(
+      "[OpenCode Sensor V2] Защита отключена: enabled=false. Hooks и локальные сервисы сенсора не запущены.\n",
+    );
+    return { dispose: async () => {} };
+  }
+  let startupFailure: unknown = validOptions
+    ? undefined
+    : new Error("Sensor options must be an object");
+  if (options.enabled !== undefined && typeof options.enabled !== "boolean")
+    startupFailure = new Error("Sensor enabled must be boolean");
   const instanceID = id("instance");
   const runID = id("run");
-  let startupFailure: unknown;
   let apiTimeoutMs = 5000;
   let classifierTimeoutMs = 3000;
   try {

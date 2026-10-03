@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
-import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer, type Server, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -10,7 +10,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 // This tests plugin plumbing against the actual pinned OpenCode executable;
 // the deterministic local model does not measure classifier/model quality.
 type Scenario = "approve" | "reject-pre" | "reject-post";
-type ToolKind = "shell" | "mcp" | "read-error";
+type ToolKind = "shell" | "mcp" | "read-error" | "none";
 type Json = Record<string, any>;
 type Approval = {
   id: string;
@@ -197,6 +197,11 @@ async function mockModel(
       }
       const body = JSON.parse(raw);
       allRequests.push(body);
+      if (toolKind === "none") {
+        if (body.tools?.length) primaryRequests.push(body);
+        complete(response, body, { role: "assistant", content: "SMOKE_COMPLETE" }, "stop");
+        return;
+      }
       const tool = body.tools?.find((item: Json) =>
         toolKind === "read-error"
           ? item.function?.name === "read"
@@ -321,11 +326,12 @@ async function runScenario(
   scenario: Scenario,
   toolKind: ToolKind = "shell",
   brokenStartup = false,
+  disabled = false,
 ) {
   if (
     process.env.SMOKE_CASES &&
     !process.env.SMOKE_CASES.split(",").includes(
-      brokenStartup ? "startup-failure" : `${toolKind}/${scenario}`,
+      disabled ? "disabled" : brokenStartup ? "startup-failure" : `${toolKind}/${scenario}`,
     )
   )
     return;
@@ -371,6 +377,7 @@ async function runScenario(
             {
               package: pathToFileURL(pluginPackage).href,
               options: {
+                enabled: !disabled,
                 stateDirectory,
                 openBrowser: false,
                 apiTimeoutMs: 2_000,
@@ -448,6 +455,41 @@ async function runScenario(
       state.output += String(error);
     });
 
+    if (disabled || toolKind === "none") {
+      await poll("ungated completion", async () => (state.exited ? true : undefined));
+      assert.equal(state.code, 0, diagnostics(state.output));
+      assert.deepEqual(model.failures, []);
+      assert.ok(state.output.includes("SMOKE_COMPLETE"), "Model did not finish normally");
+      if (disabled) {
+        assert.equal(await readFile(marker, "utf8"), "executed");
+        assert.equal(model.primaryRequests.length, 2);
+        assert.ok(
+          model.allRequests.some((request) =>
+            request.messages.some(
+              (message: Json) =>
+                message.role === "tool" && JSON.stringify(message.content).includes(sentinel),
+            ),
+          ),
+        );
+        assert.equal(
+          await exists(stateDirectory),
+          false,
+          "Disabled sensor created state or audit files",
+        );
+        assert.ok(state.output.includes("enabled=false"), "Disabled mode was not reported");
+        console.log("PASS disabled: model and tool complete without sensor UI, state or approvals");
+      } else {
+        assert.equal(model.primaryRequests.length, 1);
+        assert.equal(await exists(marker), false);
+        assert.deepEqual(await readdir(join(stateDirectory, "requests")), []);
+        assert.ok(state.output.includes("Заглушка классификатора включена"));
+        console.log(
+          "PASS text-only: enabled protection permits a normal model response without tool approvals",
+        );
+      }
+      passed = true;
+      return;
+    }
     if (brokenStartup) {
       await poll("failed startup completion", async () => (state.exited ? true : undefined));
       assert.equal(await exists(marker), false, "Operation escaped after sensor startup failure");
@@ -591,3 +633,5 @@ for (const scenario of ["approve", "reject-post"] as const) await runScenario(sc
 for (const scenario of ["approve", "reject-post"] as const)
   await runScenario(scenario, "read-error");
 await runScenario("approve", "shell", true);
+await runScenario("approve", "none");
+await runScenario("approve", "shell", false, true);
