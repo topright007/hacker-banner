@@ -65,8 +65,12 @@ await writeFile(
       version: pkg.version,
       harness: "OpenCode 2.0.22",
       classifier_contract: "2.1.0",
-      classifier: "local always-deny stub; no network classifier configured",
-      approval_ui: "native OpenCode session forms; no browser or separate approval server",
+      classifier_contracts: { stub: "2.1.0", agent_monitor: "2.2.0" },
+      monitor_protocol: 1,
+      classifier:
+        "default local always-deny stub; optional separately configured Agent Monitor HTTP backend",
+      approval_ui:
+        "stub: native OpenCode session forms; agent_monitor: trusted service operator CLI while exact call waits",
       source_commit: commit.status === 0 ? commit.stdout.trim() : null,
       source_dirty: changes.status === 0 ? changes.stdout.trim().length > 0 : null,
       bundle_sha256: createHash("sha256").update(bundle).digest("hex"),

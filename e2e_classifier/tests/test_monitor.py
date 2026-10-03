@@ -220,3 +220,19 @@ def test_api_auth_schema_and_size(rig, tmp_path):
 @pytest.mark.parametrize("url,expected", [("https://example.com/a", True), ("https://example.com:443/a", True), ("https://example.com.evil/a", False), ("https://example.com@evil/a", False), ("http://example.com/a", False), ("https://example.com:8443/a", False)])
 def test_destination_origin(url, expected):
     assert Policy.allowed_destination(url, ["https://example.com"]) is expected
+
+
+@pytest.mark.parametrize("change", ["expiry", "sensitivity", "policy"])
+def test_polling_stale_pending_approval_fails_instead_of_waiting_forever(rig, change):
+    req = request(rig, "fixture_delete", {"target": "synthetic"})
+    pending = rig[0].evaluate(req, rig[1]["run_token"])
+    assert pending.decision == "REQUIRE_APPROVAL"
+    assert rig[0].evaluate(req, rig[1]["run_token"]).decision == "REQUIRE_APPROVAL"
+    if change == "expiry":
+        rig[3][0] += 301
+    elif change == "sensitivity":
+        evaluate(rig, "fixture_read_private", call="new-sensitive-read")
+    else:
+        rig[0].policy.version = "changed-policy"
+    with pytest.raises(MonitorError, match="expired or security state changed"):
+        rig[0].evaluate(req, rig[1]["run_token"])

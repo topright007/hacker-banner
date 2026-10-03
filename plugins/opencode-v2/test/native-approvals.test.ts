@@ -17,6 +17,7 @@ function checkpoint(
   failed = false,
 ) {
   const unsigned = {
+    contract_version: "2.1.0" as const,
     request_id: id,
     phase,
     current_call: {

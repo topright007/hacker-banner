@@ -8,7 +8,10 @@
       "const": "opencode-plugin-classifier"
     },
     "contract_version": {
-      "const": "2.1.0"
+      "enum": [
+        "2.1.0",
+        "2.2.0"
+      ]
     },
     "request_id": {
       "type": "string"
@@ -821,23 +824,48 @@
       "type": "object",
       "properties": {
         "classifier_unavailable": {
-          "const": "allow_with_harness_permissions"
+          "enum": [
+            "allow_with_harness_permissions",
+            "block_session_tree_and_request_abort"
+          ]
         },
         "classifier_deny": {
-          "const": "ask_user"
+          "enum": [
+            "ask_user",
+            "block_or_require_monitor_approval"
+          ]
         },
         "user_allow": {
-          "const": "allow_once_for_bound_checkpoint"
+          "enum": [
+            "allow_once_for_bound_checkpoint",
+            "requires_monitor_approval_and_execution_permit"
+          ]
         },
         "user_reject": {
-          "const": "reject_tool_call_or_withhold_result"
+          "enum": [
+            "reject_tool_call_or_withhold_result",
+            "block_session_tree_and_request_abort"
+          ]
         },
         "user_no_response": {
-          "const": "keep_checkpoint_pending"
+          "enum": [
+            "keep_checkpoint_pending",
+            "keep_blocked"
+          ]
         },
         "classifier_timeout_ms": {
           "type": "integer",
           "minimum": 1
+        },
+        "backend": {
+          "enum": [
+            "stub",
+            "agent_monitor"
+          ]
+        },
+        "monitor_run_id": {
+          "type": "string",
+          "minLength": 1
         }
       },
       "required": [
@@ -849,7 +877,7 @@
         "classifier_timeout_ms"
       ],
       "additionalProperties": false,
-      "description": "Policy chosen for MVP. Classifier transport timeout/unavailable is fail-open and audited. A bound human rejection cancels only this pre-tool call or withholds the entire post-tool result/error using a safe placeholder. Waiting keeps this checkpoint pending. Neither installs a permanent session/tree lock. Post decisions do not undo or re-run the tool. Native OpenCode restrictions still apply."
+      "description": "Configured backend enforcement. Contract 2.1.0 retains call-scoped stub classification and native session approval forms. Optional Agent Monitor contract 2.2.0 adds fail-closed decisions, service approvals and single-use execution permits; post reporting updates monitor state and is not a safety verdict."
     },
     "binding": {
       "type": "object",
@@ -869,5 +897,94 @@
       "additionalProperties": false,
       "description": "SHA-256 of UTF-8 RFC 8785 canonical JSON of the entire request excluding top-level decision_binding. Bind response/override to this immutable snapshot and phase; reject non-I-JSON before transport, never silently recode. Transport credentials excluded."
     }
-  }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "contract_version": {
+            "const": "2.1.0"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "enforcement": {
+            "type": "object",
+            "properties": {
+              "classifier_unavailable": {
+                "const": "allow_with_harness_permissions"
+              },
+              "classifier_deny": {
+                "const": "ask_user"
+              },
+              "user_allow": {
+                "const": "allow_once_for_bound_checkpoint"
+              },
+              "user_reject": {
+                "const": "reject_tool_call_or_withhold_result"
+              },
+              "user_no_response": {
+                "const": "keep_checkpoint_pending"
+              },
+              "classifier_timeout_ms": {
+                "type": "integer",
+                "minimum": 1
+              }
+            },
+            "required": [
+              "classifier_unavailable",
+              "classifier_deny",
+              "user_allow",
+              "user_reject",
+              "user_no_response",
+              "classifier_timeout_ms"
+            ],
+            "additionalProperties": false,
+            "description": "Policy chosen for MVP. Classifier transport timeout/unavailable is fail-open and audited. A bound human rejection cancels only this pre-tool call or withholds the entire post-tool result/error using a safe placeholder. Waiting keeps this checkpoint pending. Neither installs a permanent session/tree lock. Post decisions do not undo or re-run the tool. Native OpenCode restrictions still apply."
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "contract_version": {
+            "const": "2.2.0"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "enforcement": {
+            "type": "object",
+            "properties": {
+              "classifier_unavailable": {
+                "const": "block_session_tree_and_request_abort"
+              },
+              "classifier_deny": {
+                "const": "block_or_require_monitor_approval"
+              },
+              "user_allow": {
+                "const": "requires_monitor_approval_and_execution_permit"
+              },
+              "user_reject": {
+                "const": "block_session_tree_and_request_abort"
+              },
+              "user_no_response": {
+                "const": "keep_blocked"
+              },
+              "backend": {
+                "const": "agent_monitor"
+              }
+            },
+            "required": [
+              "backend",
+              "monitor_run_id"
+            ]
+          }
+        }
+      }
+    }
+  ]
 }

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -13,6 +13,7 @@ import {
 } from "../src/protocol.js";
 import { ActionRejectedError } from "../src/gates.js";
 import type { Classifier } from "../src/classifier.js";
+import { MonitorBackend } from "../src/monitor.js";
 
 class UI implements ApprovalUI {
   pending: { request: ClassifierRequest; resolve: (decision: "allow" | "reject") => void }[] = [];
@@ -906,5 +907,391 @@ test("scalar, array and null options fail closed rather than bypassing setup", a
     } finally {
       await hooks.dispose();
     }
+  }
+});
+
+async function monitorSetup(responder?: (path: string, body: any) => unknown | Promise<unknown>) {
+  const directory = await mkdtemp(join(tmpdir(), "sensor-monitor-"));
+  const workspace = join(directory, "workspace");
+  const { mkdir } = await import("node:fs/promises");
+  await mkdir(workspace);
+  const f = fixtureContext();
+  f.ctx.location.directory = workspace;
+  f.sessions.ses_test.location.directory = workspace;
+  const calls: { path: string; body: any }[] = [];
+  const decision = (verdict = "ALLOW") => ({
+    decision_id: "decision",
+    decision: verdict,
+    action_hash: "a".repeat(64),
+    policy_version: "test-policy",
+    reason_codes: verdict === "ALLOW" ? [] : ["P01"],
+    findings: [],
+    sensitive_run: false,
+    approval_id: verdict === "REQUIRE_APPROVAL" ? "approval" : null,
+    permit: verdict === "ALLOW" ? "permit" : null,
+  });
+  const client = new MonitorBackend(
+    {
+      url: "http://127.0.0.1:8765",
+      run_id: "service-run",
+      run_token: "test-run-token-123456789012345",
+      workspace: await realpath(workspace),
+      policy_version: "test-policy",
+    },
+    async (url, options) => {
+      const path = new URL(String(url)).pathname;
+      const body = JSON.parse(String(options?.body));
+      calls.push({ path, body });
+      const custom = await responder?.(path, body);
+      return Response.json(
+        custom ??
+          (path === "/v1/evaluate"
+            ? decision()
+            : path === "/v1/start"
+              ? { started: true }
+              : {
+                  recorded: true,
+                  sensitive_run: false,
+                  ...(path === "/v1/events" ? { findings: [] } : {}),
+                }),
+      );
+    },
+    100,
+  );
+  const ui = new UI();
+  ui.start = async () => {
+    throw new Error("Monitor mode must not initialize native confirmation forms");
+  };
+  const hooks = await createSensor(
+    f.ctx,
+    {
+      backend: "agent_monitor",
+      stateDirectory: join(directory, "state"),
+      openBrowser: false,
+      apiTimeoutMs: 100,
+      classifierTimeoutMs: 1,
+    },
+    {
+      monitor: client,
+      approvals: ui,
+      classifier: async () => {
+        throw new Error("Monitor mode must not invoke the stub classifier");
+      },
+    },
+  );
+  return {
+    ...f,
+    hooks,
+    calls,
+    ui,
+    client,
+    decision,
+    directory,
+    cleanup: async () => {
+      await hooks.dispose();
+      await rm(directory, { recursive: true, force: true });
+    },
+  };
+}
+
+async function monitorCalls(f: Awaited<ReturnType<typeof monitorSetup>>, path: string, count = 1) {
+  for (let i = 0; i < 400; i++) {
+    if (f.calls.filter((c) => c.path === path).length >= count) return;
+    await delay(5);
+  }
+  throw new Error(`Expected ${count} monitor calls to ${path}`);
+}
+
+test("monitor mode binds context and permits to service run, without local approval UI", async () => {
+  const f = await monitorSetup();
+  try {
+    await f.registered.get("session.prompt")!({
+      sessionID: "ses_test",
+      prompt: { text: "Review" },
+      messageID: "p",
+    });
+    await f.registered.get("session.context")!(modelContext());
+    await f.registered.get("tool.execute.before")!(structuredClone(input));
+    await f.registered.get("tool.execute.after")!(post());
+    assert.deepEqual(
+      f.calls.map((c) => c.path),
+      ["/v1/events", "/v1/events", "/v1/evaluate", "/v1/start", "/v1/results"],
+    );
+    assert.deepEqual(f.calls[2].body, f.calls[3].body);
+    assert.equal(f.calls[2].body.run_id, "service-run");
+    assert.equal(f.calls[2].body.call_id, "msg_assistant:call_read");
+    assert.equal(f.ui.pending.length, 0);
+    await assert.rejects(readFile(join(f.directory, "state/control.json")), /ENOENT/);
+    const files = await readdir(join(f.directory, "state/requests"));
+    const snapshots = await Promise.all(
+      files.map((file) =>
+        readFile(join(f.directory, "state/requests", file), "utf8").then(JSON.parse),
+      ),
+    );
+    assert.ok(
+      snapshots.every(
+        (r) => r.contract_version === "2.2.0" && r.enforcement.monitor_run_id === "service-run",
+      ),
+    );
+    assert.ok(
+      snapshots.every(
+        (r) => r.enforcement.classifier_unavailable !== "allow_with_harness_permissions",
+      ),
+    );
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("monitor hard BLOCK cannot be overridden and cancels only the denied call", async () => {
+  const f = await monitorSetup((path, body) =>
+    path === "/v1/evaluate" && body.call_id === "msg_assistant:call_read"
+      ? {
+          decision_id: "d",
+          decision: "BLOCK",
+          action_hash: "a".repeat(64),
+          policy_version: "test-policy",
+          reason_codes: ["P01"],
+          findings: [],
+          sensitive_run: false,
+          approval_id: null,
+          permit: null,
+        }
+      : undefined,
+  );
+  try {
+    await assert.rejects(
+      f.hooks["tool.execute.before"](structuredClone(input)),
+      ActionRejectedError,
+    );
+    assert.equal(f.ui.pending.length, 0);
+    assert.ok(!f.calls.some((c) => c.path === "/v1/start"));
+    const deniedResult = {
+      ...structuredClone(input),
+      status: "error",
+      error: new Error("PRIVATE_HARNESS_ERROR"),
+    };
+    await f.hooks["tool.execute.after"](deniedResult);
+    assert.equal(deniedResult.error.message.includes("PRIVATE_HARNESS_ERROR"), false);
+    assert.match(deniedResult.error.message, /Карантин/);
+    assert.equal(f.client.isBroken, false);
+    assert.ok(!f.calls.some((c) => c.path === "/v1/results"));
+    await f.hooks["session.model.request"]({ ...modelContext(), kind: "primary", headers: {} });
+    const next = { ...structuredClone(input), messageID: "msg_next", id: "call_next" };
+    await f.hooks["tool.execute.before"](next);
+    await f.hooks["tool.execute.after"]({ ...post(), ...next });
+    assert.equal(f.calls.filter((call) => call.path === "/v1/start").length, 1);
+    assert.equal(f.calls.filter((call) => call.path === "/v1/results").length, 1);
+    assert.equal(f.interrupts.length, 0);
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("service approval holds the exact call and consumes permit after approval", async () => {
+  let approved = false;
+  const f = await monitorSetup((path) =>
+    path === "/v1/evaluate"
+      ? {
+          decision_id: "d",
+          decision: approved ? "ALLOW" : "REQUIRE_APPROVAL",
+          action_hash: "a".repeat(64),
+          policy_version: "test-policy",
+          reason_codes: [],
+          findings: [],
+          sensitive_run: false,
+          approval_id: approved ? null : "approval",
+          permit: approved ? "permit" : null,
+        }
+      : undefined,
+  );
+  try {
+    let completed = false;
+    const before = f.hooks["tool.execute.before"](structuredClone(input)).then(() => {
+      completed = true;
+    });
+    await monitorCalls(f, "/v1/evaluate");
+    await delay(20);
+    assert.equal(completed, false);
+    assert.equal(f.ui.pending.length, 0);
+    assert.ok(!f.calls.some((c) => c.path === "/v1/start"));
+    approved = true;
+    await before;
+    const evaluations = f.calls.filter((c) => c.path === "/v1/evaluate");
+    assert.ok(evaluations.length >= 2);
+    assert.deepEqual(evaluations[0].body, evaluations[1].body);
+    assert.deepEqual(f.calls.find((c) => c.path === "/v1/start")!.body, evaluations[0].body);
+    await f.hooks["tool.execute.after"](post());
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("cancellation aborts monitor approval waiting and never starts the tool", async () => {
+  const f = await monitorSetup((path) =>
+    path === "/v1/evaluate"
+      ? {
+          decision_id: "d",
+          decision: "REQUIRE_APPROVAL",
+          action_hash: "a".repeat(64),
+          policy_version: "test-policy",
+          reason_codes: [],
+          findings: [],
+          sensitive_run: false,
+          approval_id: "approval",
+          permit: null,
+        }
+      : undefined,
+  );
+  try {
+    const before = assert.rejects(f.hooks["tool.execute.before"](structuredClone(input)));
+    await monitorCalls(f, "/v1/evaluate");
+    f.hooks.event({ type: "session.execution.interrupted", data: { sessionID: "ses_test" } });
+    await before;
+    assert.ok(!f.calls.some((c) => c.path === "/v1/start"));
+    const lateResult = post();
+    await f.hooks["tool.execute.after"](lateResult);
+    assert.deepEqual(Object.keys(lateResult.result), ["content"]);
+    assert.equal(typeof lateResult.result.content, "string");
+    assert.equal(JSON.stringify(lateResult.result).includes("untrusted tool content"), false);
+    assert.ok(!f.calls.some((c) => c.path === "/v1/results"));
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("argument mutation while awaiting service approval prevents start", async () => {
+  let approved = false;
+  const f = await monitorSetup((path) =>
+    path === "/v1/evaluate"
+      ? {
+          decision_id: "d",
+          decision: approved ? "ALLOW" : "REQUIRE_APPROVAL",
+          action_hash: "a".repeat(64),
+          policy_version: "test-policy",
+          reason_codes: [],
+          findings: [],
+          sensitive_run: false,
+          approval_id: approved ? null : "approval",
+          permit: approved ? "permit" : null,
+        }
+      : undefined,
+  );
+  try {
+    const mutable = structuredClone(input);
+    const before = assert.rejects(f.hooks["tool.execute.before"](mutable), ActionRejectedError);
+    await monitorCalls(f, "/v1/evaluate");
+    mutable.input.path = "/workspace/changed";
+    approved = true;
+    await before;
+    assert.ok(!f.calls.some((c) => c.path === "/v1/start"));
+  } finally {
+    await f.cleanup();
+  }
+});
+
+for (const failedPath of ["/v1/evaluate", "/v1/start", "/v1/results"]) {
+  test(`monitor failure at ${failedPath} stops execution without classifier fail-open`, async () => {
+    const f = await monitorSetup((path) => {
+      if (path === failedPath) throw new Error("Offline");
+    });
+    try {
+      if (failedPath === "/v1/results") {
+        await f.hooks["tool.execute.before"](structuredClone(input));
+        const output = post();
+        await f.hooks["tool.execute.after"](output);
+        assert.deepEqual(Object.keys(output.result), ["content"]);
+        assert.equal(typeof output.result.content, "string");
+        assert.match(String(output.result.content), /Карантин/);
+        assert.equal(JSON.stringify(output.result).includes("untrusted tool content"), false);
+      } else await assert.rejects(f.hooks["tool.execute.before"](structuredClone(input)));
+      await assert.rejects(f.hooks["session.model.request"]({ sessionID: "ses_test" }));
+      assert.equal(f.ui.pending.length, 0);
+    } finally {
+      await f.cleanup();
+    }
+  });
+}
+
+test("monitor mode blocks attachments, subagents and unmediated shells", async () => {
+  const f = await monitorSetup();
+  try {
+    await assert.rejects(f.hooks["shell.create.before"]({}), /shells/);
+    const permission = { sessionID: "ses_test", action: "execute", effect: "allow", message: "" };
+    await f.hooks["permission.evaluate"](permission);
+    assert.equal(permission.effect, "deny");
+    await assert.rejects(
+      f.hooks["session.prompt"]({
+        sessionID: "ses_test",
+        prompt: { text: "Read", files: ["attachment"] },
+      }),
+      /attachments/,
+    );
+    assert.ok(!f.calls.some((c) => c.path === "/v1/evaluate"));
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("monitor mode refuses missing credentials during startup and leaves blocking hooks", async () => {
+  const f = await setup(undefined, new UI(), { backend: "agent_monitor" });
+  try {
+    await assert.rejects(
+      f.hooks["session.model.request"]({ ...modelContext(), kind: "primary", headers: {} }),
+    );
+  } finally {
+    await f.cleanup();
+  }
+});
+
+for (const endpoint of ["/v1/start", "/v1/results"]) {
+  test(`mutation during ${endpoint} cannot release a changed checkpoint`, async () => {
+    const mutable = endpoint === "/v1/start" ? structuredClone(input) : post();
+    const f = await monitorSetup((path) => {
+      if (path === endpoint) {
+        if (endpoint === "/v1/start") mutable.input.path = "/workspace/changed-during-start";
+        else (mutable as ReturnType<typeof post>).result.content[0].text = "changed-during-report";
+      }
+    });
+    try {
+      if (endpoint === "/v1/results") {
+        await f.hooks["tool.execute.before"](structuredClone(input));
+        await f.hooks["tool.execute.after"](mutable);
+        const quarantined = (mutable as ReturnType<typeof post>).result;
+        assert.deepEqual(Object.keys(quarantined), ["content"]);
+        assert.equal(typeof quarantined.content, "string");
+        assert.match(String(quarantined.content), /Карантин/);
+        assert.equal(JSON.stringify(quarantined).includes("changed-during-report"), false);
+      } else {
+        await assert.rejects(f.hooks["tool.execute.before"](mutable), ActionRejectedError);
+      }
+      await assert.rejects(
+        f.hooks["session.model.request"]({ ...modelContext(), kind: "primary", headers: {} }),
+      );
+      assert.equal(f.ui.pending.length, 0);
+    } finally {
+      await f.cleanup();
+    }
+  });
+}
+
+test("interruption while consuming a permit cannot release the tool", async () => {
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const f = await monitorSetup(async (path) => {
+    if (path === "/v1/start") await held;
+  });
+  try {
+    const before = assert.rejects(f.hooks["tool.execute.before"](structuredClone(input)));
+    await monitorCalls(f, "/v1/start");
+    f.hooks.event({ type: "session.execution.interrupted", data: { sessionID: "ses_test" } });
+    release();
+    await before;
+    await assert.rejects(f.hooks["session.model.request"]({ sessionID: "ses_test" }));
+  } finally {
+    release();
+    await f.cleanup();
   }
 });

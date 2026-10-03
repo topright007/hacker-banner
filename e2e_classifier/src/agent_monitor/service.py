@@ -90,10 +90,14 @@ class Monitor:
                 approval = db.execute("SELECT * FROM approvals WHERE id=?", (response.approval_id,)).fetchone()
                 if approval and approval["status"] == "rejected":
                     raise MonitorError(403, "Exact action approval was rejected")
-                if not approval or approval["status"] != "approved":
-                    return response
+                if not approval:
+                    raise MonitorError(409, "Approval state missing; submit a new call")
+                # A waiting adapter polls this exact call. Reject stale pending
+                # approvals too: otherwise they can never be approved or resumed.
                 if approval["expires"] < self.clock() or approval["epoch"] != run["epoch"] or approval["policy_version"] != self.policy.version:
                     raise MonitorError(409, "Approval expired or security state changed; submit a new call")
+                if approval["status"] != "approved":
+                    return response
 
             assessment = self.policy.assess(run, action)
             reasons = list(assessment.reasons)

@@ -5,10 +5,12 @@ import requestSchema from "./contracts/request.schema.json";
 import responseSchema from "./contracts/response.schema.json";
 
 export type Phase = "pre_tool_call" | "post_tool_call";
+export type ContractVersion = "2.1.0" | "2.2.0";
 // Native OpenCode objects deliberately preserve unknown fields. The wire boundary is
 // checked against the versioned JSON Schemas, not the older SDK's narrower typings.
 export type Native = Record<string, any>;
 export type ClassifierRequest = Native & {
+  contract_version: ContractVersion;
   request_id: string;
   phase: Phase;
   current_call: Native;
@@ -17,7 +19,7 @@ export type ClassifierRequest = Native & {
 };
 export interface ClassifierResponse {
   contract: "opencode-plugin-classifier";
-  contract_version: "2.1.0";
+  contract_version: ContractVersion;
   request_id: string;
   phase: Phase;
   binding_digest: string;
@@ -113,7 +115,7 @@ export function responseFor(
 ): ClassifierResponse {
   return {
     contract: "opencode-plugin-classifier",
-    contract_version: "2.1.0",
+    contract_version: request.contract_version,
     request_id: request.request_id,
     phase: request.phase,
     binding_digest: request.decision_binding.digest,
@@ -130,6 +132,7 @@ export function assertResponse(
     throw new Error(`Invalid classifier response: ${ajv.errorsText(validateResponse.errors)}`);
   const result = response as unknown as ClassifierResponse;
   if (
+    result.contract_version !== request.contract_version ||
     result.request_id !== request.request_id ||
     result.phase !== request.phase ||
     result.binding_digest !== request.decision_binding.digest
