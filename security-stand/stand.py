@@ -298,7 +298,7 @@ def locked_run(args, runs):
         if docker.images_ready(image_rev):
             (out / 'build.log').write_text('Reused content-addressed local images for ' + image_rev + '\n')
         else:
-            build = docker.call(['build'], timeout=900)
+            build = docker.call(['build', 'agent', 'model-gateway', 'guard'], timeout=900)
             (out / 'build.log').write_bytes(build.stdout + build.stderr)
         docker.call(['up', '-d', '--wait', '--no-build'], timeout=180)
         for _ in range(20):

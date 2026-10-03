@@ -18,6 +18,30 @@ def upstream_allowed(url):
     return url == OLLAMA_ENDPOINT or urllib.parse.urlsplit(url).scheme == 'https'
 
 
+def normalize_completion(value):
+    """Accept a native OpenAI completion or Eliza's metadata envelope."""
+    if not isinstance(value, dict):
+        raise ValueError('upstream response is not an object')
+    candidate = value
+    if 'choices' not in candidate and isinstance(candidate.get('response'), dict):
+        candidate = candidate['response']
+    if not isinstance(candidate.get('choices'), list):
+        raise ValueError('upstream response has no choices')
+    return candidate
+
+
+def completion_chunks(response):
+    """Convert completion choices to streaming deltas accepted by OpenAI clients."""
+    chunks = []
+    for choice in response['choices']:
+        delta = {key: value for key, value in choice['message'].items() if value is not None}
+        for index, call in enumerate(delta.get('tool_calls', [])):
+            call['index'] = index
+        chunks.append({'index': choice['index'], 'delta': delta,
+                       'finish_reason': choice.get('finish_reason')})
+    return chunks
+
+
 MAX_BODY = 2 * 1024 * 1024
 MODE = os.environ.get('MODE', 'collector')
 LOCK = threading.Lock()
@@ -171,20 +195,20 @@ class Handler(BaseHTTPRequestHandler):
                     body = upstream.read(MAX_BODY + 1)
                     if len(body) > MAX_BODY:
                         raise ValueError('upstream response too large')
-                    response = json.loads(body)
+                    upstream_response = json.loads(body)
+                    if isinstance(upstream_response, dict) and isinstance(upstream_response.get('response'), dict):
+                        metadata = {key: upstream_response[key] for key in (
+                            'attempt_count', 'elapsed_time_ms', 'last_request_duration_ms',
+                            'cost', 'request_id') if key in upstream_response}
+                        trace_event('upstream_metadata', count, metadata)
+                    response = normalize_completion(upstream_response)
             else:
                 return self.respond(500, {'error': 'unknown mode'})
             trace_event('response', count, response)
             if not stream:
                 return self.respond(200, response)
             # One complete delta is valid SSE; don't forward provider headers or keys.
-            chunks = []
-            for choice in response['choices']:
-                delta = dict(choice['message'])
-                for index, call in enumerate(delta.get('tool_calls', [])):
-                    call['index'] = index
-                chunks.append({'index': choice['index'], 'delta': delta,
-                               'finish_reason': choice.get('finish_reason')})
+            chunks = completion_chunks(response)
             event = {k: response[k] for k in ('id', 'created', 'model') if k in response}
             event.update(object='chat.completion.chunk', choices=chunks)
             if 'usage' in response:

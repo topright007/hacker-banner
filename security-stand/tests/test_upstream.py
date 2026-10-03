@@ -1,5 +1,5 @@
 import unittest
-from services.api import mock_completion, upstream_allowed
+from services.api import completion_chunks, mock_completion, normalize_completion, upstream_allowed
 
 
 class UpstreamPolicyTest(unittest.TestCase):
@@ -20,6 +20,26 @@ class UpstreamPolicyTest(unittest.TestCase):
         ):
             with self.subTest(url=url):
                 self.assertFalse(upstream_allowed(url))
+
+    def test_native_completion_is_unchanged(self):
+        completion = {'choices': [{'message': {'content': 'ok'}}]}
+        self.assertIs(normalize_completion(completion), completion)
+
+    def test_eliza_completion_envelope_is_unwrapped(self):
+        completion = {'choices': [{'message': {'content': 'ok'}}]}
+        envelope = {'response': completion, 'elapsed_time_ms': 123, 'key': 'not-forwarded'}
+        self.assertIs(normalize_completion(envelope), completion)
+
+    def test_invalid_completion_is_rejected(self):
+        with self.assertRaises(ValueError):
+            normalize_completion({'response': {'object': 'chat.completion'}})
+
+    def test_stream_delta_omits_null_fields(self):
+        response = {'choices': [{'index': 0, 'message': {
+            'role': 'assistant', 'content': 'done', 'tool_calls': None,
+            'reasoning_content': None}, 'finish_reason': 'stop'}]}
+        self.assertEqual(completion_chunks(response), [{'index': 0, 'delta': {
+            'role': 'assistant', 'content': 'done'}, 'finish_reason': 'stop'}])
 
 
 class MockScenarioTest(unittest.TestCase):
