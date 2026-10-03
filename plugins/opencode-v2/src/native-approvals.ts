@@ -33,44 +33,13 @@ const MAX_PENDING = 64;
 const DEFAULT_REQUEST_TIMEOUT_MS = 10_000;
 const DEFAULT_POLL_INTERVAL_MS = 300;
 
-// User-controlled values remain quoted data even if they contain line breaks,
-// terminal control codes, bidi controls or apparent instructions.
-function preview(value: unknown, limit: number, fallback = "Не указано"): string {
-  const label = typeof value === "string" && value.trim() ? value : fallback;
-  let safe = "";
-  for (const character of label) {
-    const encoded = /[\u007f-\u009f\u061c\u200e\u200f\u2028-\u202e\u2066-\u2069`<>&*_\[\]]/.test(
-      character,
-    )
-      ? `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`
-      : JSON.stringify(character).slice(1, -1);
-    if (safe.length + encoded.length > limit) return `"${safe}…"`;
-    safe += encoded;
-  }
-  return `"${safe}"`;
-}
+const APPROVAL_MESSAGE = "Зафиксирована хакерская атака. Выберите возможные варианты действий";
 
-function formFor(
-  request: ClassifierRequest,
-  response: ClassifierResponse,
-  allowValue: string,
-): Pending["form"] {
-  const pre = request.phase === "pre_tool_call";
-  const failed = request.current_call.result?.format === "v2_tool_error";
-  const outcome = failed ? "ошибка" : "результат";
-  const warning = pre
-    ? "Предупреждение: выполнение инструмента приостановлено."
-    : `Предупреждение: инструмент выполнен; ${outcome} удерживается.`;
-  const tool = preview(request.current_call.tool_name, 160, "Название недоступно");
-  const description = [
-    warning,
-    `Инструмент: ${tool}`,
-    `Причина: ${preview(response.reason, 320, "Классификатор не указал причину.")}`,
-  ].join("\n");
+function formFor(request: ClassifierRequest, allowValue: string): Pending["form"] {
   return {
     id: `frm_${randomUUID()}`,
     sessionID: request.current_call.session_id,
-    title: warning,
+    title: APPROVAL_MESSAGE,
     metadata: {
       // Desktop's session question dock only renders forms carrying this kind.
       kind: "question",
@@ -86,8 +55,8 @@ function formFor(
         key: "decision",
         type: "string",
         // Desktop 2.0.22 shows description ?? title, so description includes the warning.
-        title: warning,
-        description,
+        title: APPROVAL_MESSAGE,
+        description: APPROVAL_MESSAGE,
         required: true,
         // Desktop shows free input even with custom:false, but the server rejects
         // such replies before we can quarantine. Accept them and classify below.
@@ -99,7 +68,7 @@ function formFor(
           },
           {
             value: allowValue,
-            label: "Довериться и продолжить",
+            label: "Принять риски и продолжить",
           },
         ],
       },
@@ -192,7 +161,7 @@ export class NativeApprovalUI implements ApprovalUI {
     // Avoid interpreting ordinary text such as "allow" as explicit approval.
     const allowValue = `allow_${randomUUID()}`;
     const item: Pending = {
-      form: formFor(snapshot, classification, allowValue),
+      form: formFor(snapshot, allowValue),
       allowValue,
       controller: new AbortController(),
       generation,
@@ -219,9 +188,7 @@ export class NativeApprovalUI implements ApprovalUI {
       if (this.stale(item)) return "reject";
       if (!sameForm(created, item.form))
         throw new Error("Native approval form does not match its checkpoint");
-      this.notice(
-        `Карантин: ${preview(snapshot.current_call.tool_name, 200)} ожидает вашего ответа в OpenCode.`,
-      );
+      this.notice(APPROVAL_MESSAGE);
       while (!this.stale(item)) {
         const current = await this.operation(
           (signal) => client.session.form.get({ sessionID, formID: item.form.id }, { signal }),

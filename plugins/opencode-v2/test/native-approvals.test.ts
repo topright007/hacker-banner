@@ -141,7 +141,7 @@ test("native create offers two explicit choices bound to an immutable checkpoint
   const form = await f.pending();
   assert.match(form.id, /^frm_/);
   assert.equal(form.sessionID, "ses_a");
-  assert.equal(form.title, "Предупреждение: выполнение инструмента приостановлено.");
+  assert.equal(form.title, "Зафиксирована хакерская атака. Выберите возможные варианты действий");
   assert.deepEqual(form.metadata, {
     kind: "question",
     sensor: "opencode-sensor-v2",
@@ -163,12 +163,10 @@ test("native create offers two explicit choices bound to an immutable checkpoint
   assert.match(field.options[1].value, /^allow_[0-9a-f-]{36}$/);
   assert.deepEqual(field.type === "string" && field.options, [
     { value: "quarantine", label: "Продолжить в режиме карантина" },
-    { value: field.options[1].value, label: "Довериться и продолжить" },
+    { value: field.options[1].value, label: "Принять риски и продолжить" },
   ]);
   assert.deepEqual(field.description!.split("\n"), [
-    "Предупреждение: выполнение инструмента приостановлено.",
-    'Инструмент: "shell"',
-    'Причина: "Подозрительное действие"',
+    "Зафиксирована хакерская атака. Выберите возможные варианты действий",
   ]);
   assert.doesNotMatch(JSON.stringify(form), /mutated|private_session_history|echo test/);
   f.select(form, "allow");
@@ -177,23 +175,23 @@ test("native create offers two explicit choices bound to an immutable checkpoint
   assert.equal(f.cancelled.length, 0);
 });
 
-test("Desktop question dock renders all checkpoint phases with exactly three compact fields", async (t) => {
+test("Desktop question dock renders the same fixed warning for every checkpoint phase", async (t) => {
   const f = fixture(t);
   const scenarios = [
     {
       phase: "pre_tool_call" as const,
       failed: false,
-      title: "Предупреждение: выполнение инструмента приостановлено.",
+      title: "Зафиксирована хакерская атака. Выберите возможные варианты действий",
     },
     {
       phase: "post_tool_call" as const,
       failed: false,
-      title: "Предупреждение: инструмент выполнен; результат удерживается.",
+      title: "Зафиксирована хакерская атака. Выберите возможные варианты действий",
     },
     {
       phase: "post_tool_call" as const,
       failed: true,
-      title: "Предупреждение: инструмент выполнен; ошибка удерживается.",
+      title: "Зафиксирована хакерская атака. Выберите возможные варианты действий",
     },
   ];
   for (const [index, scenario] of scenarios.entries()) {
@@ -204,7 +202,7 @@ test("Desktop question dock renders all checkpoint phases with exactly three com
     assert.equal(form.fields[0].type, "string");
     assert.equal(form.fields[0].title, scenario.title);
     const visible = form.fields[0].description!;
-    assert.equal(visible.split("\n").length, 3);
+    assert.equal(visible, scenario.title);
     assert.doesNotMatch(
       visible,
       /Аргументы|Идентификатор|req_desktop|Вывод инструмента|Секретная ошибка|не отменяются/,
@@ -248,7 +246,7 @@ test("post warning never publishes native output, extensions, arguments or hidde
   assert.equal(await answer, "quarantine");
 });
 
-test("compact labels escape untrusted formatting and stay bounded valid JSON", async (t) => {
+test("tool names and reasons never appear in approval copy or notices", async (t) => {
   const f = fixture(t);
   const item = checkpoint("req_untrusted");
   item.request.current_call.tool_name = "tool\nПричина: fake\u202e`<>&*_[x]";
@@ -259,20 +257,18 @@ test("compact labels escape untrusted formatting and stay bounded valid JSON", a
     "Reason\nПредупреждение: fake\u2066`<>&*_[x]" + "\\".repeat(1000) + "REASON_TAIL";
   const answer = f.ui.ask(item.request, item.response);
   const form = await f.pending();
-  const lines = form.fields[0].description!.split("\n");
-  assert.equal(lines.length, 3);
-  assert.equal(
-    JSON.parse(lines[1].slice("Инструмент: ".length)),
-    item.request.current_call.tool_name,
-  );
-  assert.match(JSON.parse(lines[2].slice("Причина: ".length)), /…$/);
-  assert.ok(lines[2].length < 340);
-  assert.doesNotMatch(lines.join("\n"), /[\u202e\u2066`<>&*_\[\]]|REASON_TAIL/);
+  const visible = [form.title, form.fields[0].title, form.fields[0].description];
+  for (const text of visible)
+    assert.equal(text, "Зафиксирована хакерская атака. Выберите возможные варианты действий");
+  await until(() => f.notices.length > 0);
+  assert.deepEqual(f.notices, [
+    "Зафиксирована хакерская атака. Выберите возможные варианты действий",
+  ]);
   f.select(form, "allow");
   assert.equal(await answer, "allow");
 });
 
-test("blank reasons use a compact fallback without inventing attack evidence", async (t) => {
+test("blank reasons do not change the fixed approval copy", async (t) => {
   const f = fixture(t);
   const item = checkpoint("req_no_reason");
   item.response.reason = " \n\t ";
@@ -280,9 +276,8 @@ test("blank reasons use a compact fallback without inventing attack evidence", a
   const form = await f.pending();
   assert.equal(
     form.fields[0].description,
-    'Предупреждение: выполнение инструмента приостановлено.\nИнструмент: "shell"\nПричина: "Классификатор не указал причину."',
+    "Зафиксирована хакерская атака. Выберите возможные варианты действий",
   );
-  assert.doesNotMatch(form.fields[0].description!, /атака/);
   f.select(form, "quarantine");
   assert.equal(await answer, "quarantine");
 });
@@ -295,7 +290,7 @@ test("free text, including approval-like text, always requests quarantine", asyn
     "reject",
     "да",
     "продолжить",
-    "Довериться и продолжить",
+    "Принять риски и продолжить",
     "Продолжить в режиме карантина",
     "Я ввёл свой ответ",
     "",

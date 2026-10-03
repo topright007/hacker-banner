@@ -91,7 +91,10 @@ async function pending(client: NativeClient, directory: string): Promise<Approva
     assert.equal(typeof metadata.phase, "string");
     assert.equal(typeof metadata.binding_digest, "string");
     assert.equal(typeof metadata.tool, "string");
-    assert.ok(detail.title.startsWith("Предупреждение:"));
+    assert.equal(
+      detail.title,
+      "Зафиксирована хакерская атака. Выберите возможные варианты действий",
+    );
     assert.equal(detail.fields.length, 1);
     const field = detail.fields[0];
     assert.equal(field.key, "decision");
@@ -110,19 +113,10 @@ async function pending(client: NativeClient, directory: string): Promise<Approva
       field.options?.map(({ value, label }) => ({ value, label })),
       [
         { value: "quarantine", label: "Продолжить в режиме карантина" },
-        { value: allowValue, label: "Довериться и продолжить" },
+        { value: allowValue, label: "Принять риски и продолжить" },
       ],
     );
-    const description = field.description?.split("\n");
-    assert.equal(description?.length, 3, "Native warning should have exactly three visible lines");
-    assert.equal(
-      description![0],
-      detail.title,
-      "Desktop displays description instead of the field title",
-    );
-    assert.equal(JSON.parse(description![1].slice("Инструмент: ".length)), metadata.tool);
-    assert.match(description![2], /^Причина: /);
-    assert.ok(JSON.parse(description![2].slice("Причина: ".length)).includes("Тестовая заглушка"));
+    assert.equal(field.description, detail.title, "Desktop must show only the fixed warning");
     result.push({
       id: form.id,
       request_id: metadata.request_id as string,

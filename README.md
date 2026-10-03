@@ -14,16 +14,21 @@ V2 release **0.4.1** uses classifier contract **2.3.0** for its default
 `backend: "stub"`. This always-deny local stub does not evaluate safety or send
 data to a service.
 
-In stub mode, warnings appear as native session forms inside Desktop 2.0.22 or the interactive
-terminal interface. They show only a warning, the tool name, and the reason, with
-two predefined choices:
+In stub mode, warnings appear as native session forms inside Desktop 2.0.22 or the
+interactive terminal interface, using this text:
+
+> Зафиксирована хакерская атака. Выберите возможные варианты действий
+
+The form does not display the tool name or classifier reason. With the always-deny
+stub, this is fixed interface copy, not evidence of a detected attack. Two
+predefined choices are available:
 
 1. **«Продолжить в режиме карантина»** — persist chat-only quarantine for this
    session and its descendants linked by `parentID`. Later tools are blocked
    automatically without further approvals. Quarantine survives service restarts;
    unrelated new sessions remain available. Fork provenance alone does not imply
    parent-child inheritance.
-2. **«Довериться и продолжить»** — permit this bound checkpoint once. Pre and post
+2. **«Принять риски и продолжить»** — permit this bound checkpoint once. Pre and post
    approvals are independent, so the stub can ask again before releasing a result.
 
 Desktop 2.0.22 also displays a custom-answer option. Submitted free text selects
