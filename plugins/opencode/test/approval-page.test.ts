@@ -204,7 +204,7 @@ test("warning decisions apply to the reviewed operation with phase-specific acti
         item,
       ]);
       const card = loaded.container.children[0]!;
-      assert.match(card.text, /Предупреждение: классификатор отклонил эту операцию/);
+      assert.match(card.text, /Карантин: классификатор отклонил эту операцию/);
       assert.match(card.text, /Требуется ваше решение/);
       assert.ok(!card.text.includes("Остановить сессию"));
       assert.equal(card.className, "warning");

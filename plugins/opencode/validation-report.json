@@ -1,81 +1,50 @@
 {
-  "plugin_version": "0.1.1",
+  "plugin_version": "0.1.2",
   "contract_version": "1.1.0",
   "opencode_version": "1.18.11",
   "node_version": "24.19.0",
-  "platform": "macOS arm64",
-  "validated_at": "2026-10-03T10:19:41.727962+00:00",
+  "platform": "darwin arm64",
+  "validated_at": "2026-10-03T10:34:58.847Z",
+  "change": "Per-action quarantine feedback includes bound tool identity, pre/post phase, classifier reason and causal explanation; session stays available.",
   "build": "passed",
   "typecheck": "passed",
   "format_check": "passed",
   "unit_and_component_tests": {
-    "passed": 44,
+    "passed": 47,
     "failed": 0,
     "groups": {
-      "sensor": 15,
+      "sensor": 16,
       "collector": 9,
       "approval_page": 8,
-      "approval_server": 12
+      "approval_server": 12,
+      "quarantine_messages": 2
     }
-  },
-  "live_tests": {
-    "passed": 6,
-    "failed": 0,
-    "model": "local deterministic OpenAI-compatible server; no external LLM",
-    "scenarios": [
-      "shell approve pre/post",
-      "shell reject pre, then another approved action and same-session new user turn",
-      "shell reject post masks result, then another approved action and same-session new user turn",
-      "direct MCP approve pre/post",
-      "direct MCP reject pre, then another approved action and same-session new user turn",
-      "direct MCP reject post masks result, then another approved action and same-session new user turn"
-    ],
-    "limitations": "Shell/MCP development runs preceded the final cancellation-edge rebuild; final packaged verification runs against the final bundle."
   },
   "packaged_live_tests": {
     "status": "passed",
-    "passed": 6,
+    "passed": 2,
     "failed": 0,
-    "installation": "Fresh extracted ZIP; bundled single JS file without plugin node_modules",
-    "checksums": "all matched",
-    "scenarios": [
-      "shell/approve",
-      "shell/reject-pre",
-      "shell/reject-post",
-      "mcp/approve",
-      "mcp/reject-pre",
-      "mcp/reject-post"
+    "scenarios": ["shell/reject-pre", "mcp/reject-post"],
+    "runtime": "actual pinned OpenCode 1.18.11",
+    "model": "local deterministic OpenAI-compatible fixture; no external LLM",
+    "installation": "Standalone packaged bundle without plugin node_modules",
+    "bundle_sha256_before_and_after": "unchanged",
+    "verification": [
+      "Quarantine/tool/phase/stub reason reach the actual next model request.",
+      "The rejected pre call does not execute; blocked post content is withheld.",
+      "Each case continues with another approved tool and a new user turn in the same session/server/plugin."
     ],
-    "continuation": "All four rejection scenarios verified a separately approved next action and next user turn in the same session with the same server/plugin control identity.",
-    "context_collection_errors": 0,
-    "bundle_includes_final_cancellation_fix": true
-  },
-  "live_context": {
-    "observed": [
-      "native session information and full available messages",
-      "actual message/part/call correlation",
-      "agent/provider/model identity",
-      "system and messages hook observations",
-      "ordinary builtin tool definitions",
-      "raw MCP content/resource/structuredContent/_meta at post before masking"
-    ],
-    "MCP_definitions": "Direct MCP definitions are not exposed by V1 registry/tool.definition; definition_ids remain empty and match is unknown, rather than invented."
+    "scope": "Targeted quarantine regression suite; previous full live matrix was not repeated for this text/feedback change."
   },
   "review": {
-    "status": "complete; no unresolved findings in this change",
-    "fixed": [
-      "Refusal no longer latches session/tree or aborts adjacent calls.",
-      "All own builtin/MCP result fields are replaced in place before normal result release.",
-      "Cancellation during approval initialization cannot leave an orphan card.",
-      "An abort-ignoring tool late post after native error/idle is discarded without reopening approval; regression failed before fix and passed after."
+    "status": "manual source review completed",
+    "verified": [
+      "Classifier reason survives both pre rejection and post replacement.",
+      "Stub quarantine is explicitly marked as a test; technical failures do not assert attack detection.",
+      "Tool identity is captured before asynchronous waits; tool/reason labels are bounded escaped JSON data.",
+      "Post replacement retains complete original result/error scrubbing; no session latch or abort was added."
     ]
   },
-  "regressions_verified": [
-    "Concurrent approvals remain independently bound and cannot be replayed.",
-    "Same-session next action and user turn work after pre/post rejection without plugin reload.",
-    "UI failure and mutated approved values cancel only the affected checkpoint.",
-    "Actual page JS implements red per-action warning, bound continue/cancel buttons and tab capability recovery."
-  ],
   "limits": [
     "Always-deny stub does not detect threats. Classifier unavailability intentionally fails open.",
     "Live tests use builtin shell and direct local MCP; special slash/subtask and experimental background execution are outside this live suite.",
@@ -83,7 +52,9 @@
     "Special slash/subtask pre refusal may end the current turn; it installs no session latch. This path may copy attachments before post. Background completion messages bypass the original post checkpoint.",
     "No OS sandbox, exact final provider payload or complete ordinary MCP definition catalog is provided.",
     "Known startup failure remains: if initialization fails before hooks are returned, OpenCode may continue without sensor enforcement.",
-    "Observed journals and cancelled invocation records are not automatically restored or rotated; a cancelled invocation is retained until a late post or session deletion."
+    "Observed journals and cancelled invocation records are not automatically restored or rotated; a cancelled invocation is retained until a late post or session deletion.",
+    "Feedback is returned through tool error/result and asks the model to explain it. No separate assistant message is inserted; exact final chat wording is not guaranteed.",
+    "Tool names and classifier reasons are limited to 200 and 1000 source characters, with an explicit truncation marker."
   ],
   "known_open_findings": [
     {
@@ -91,5 +62,5 @@
       "summary": "Plugin initialization failure may leave OpenCode without sensor hooks; unchanged and outside the requested per-action cancellation fix."
     }
   ],
-  "tested_bundle_sha256": "489d73822274c94c2d51f1b6f4342ccdec782b4bf8fa85a8a91d8f6174ad1ed9"
+  "tested_bundle_sha256": "a39145626bc099c8c4d11dbc7a4bc7580a86ddc2695b747bdf2c84f8267b0ce9"
 }

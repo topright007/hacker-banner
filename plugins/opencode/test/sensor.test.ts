@@ -150,6 +150,16 @@ async function setup(classifier?: Classifier, approvalUI: ApprovalUI = new UI())
 const input = { tool: "read", sessionID: "ses_test", callID: "call_read" };
 const args = { filePath: "/workspace/README.md" };
 
+function assertQuarantine(message: string, phase: "pre" | "post", reason?: string) {
+  assert.match(message, /\[OpenCode Sensor\] Карантин:/);
+  assert.match(message, /Инструмент: "read"/);
+  assert.ok(message.includes(`Этап: ${phase === "pre" ? "до" : "после"} выполнения`));
+  assert.match(message, /Причина: "/);
+  if (reason) assert.ok(message.includes(`Причина: ${JSON.stringify(reason)}`));
+  assert.match(message, /Сессия остаётся доступной/);
+  assert.match(message, /Сообщите пользователю название инструмента, причину и итог проверки/);
+}
+
 test("default stub waits independently on pre and post; writes bound full requests", async () => {
   const f = await setup();
   try {
@@ -198,7 +208,16 @@ test("human rejection cancels only that tool and later model/tool requests remai
   const f = await setup();
   try {
     const before = f.hooks["tool.execute.before"](input, { args });
-    const rejection = assert.rejects(before, ActionRejectedError);
+    const rejection = assert.rejects(before, (error: unknown) => {
+      assert.ok(error instanceof ActionRejectedError);
+      assertQuarantine(error.message, "pre");
+      assert.match(error.message, /Тестовый карантин/);
+      assert.match(error.message, /Безопасность действия не проверялась; атака не выявлялась/);
+      assert.doesNotMatch(error.message, /Подозревается хакерская атака/);
+      assert.match(error.message, /Пользователь отклонил/);
+      assert.match(error.message, /Этот вызов инструмента не выполнен/);
+      return true;
+    });
     await pending(f.ui, 1);
     f.ui.pending[0].resolve("reject");
     await rejection;
@@ -242,7 +261,11 @@ test("post rejection scrubs builtin and MCP data in place without blocking conti
     await after;
     assert.equal(result, original);
     assert.doesNotMatch(JSON.stringify(result), /SECRET/);
-    assert.match(result.output, /Результат этого вызова скрыт/);
+    assertQuarantine(result.output, "post");
+    assert.match(result.output, /Карантин: передача результата заблокирована/);
+    assert.match(result.output, /Тестовый карантин/);
+    assert.match(result.output, /Пользователь отклонил/);
+    assert.match(result.output, /уже выполненные действия не отменены/);
     assert.deepEqual(result.metadata, {});
     assert.deepEqual(result.attachments, []);
     assert.deepEqual(result.content, [{ type: "text", text: result.output }]);
@@ -270,7 +293,40 @@ test("post mutation while the user approves masks the changed result", async () 
     f.ui.pending[0].resolve("allow");
     await after;
     assert.doesNotMatch(JSON.stringify(result), /UNAPPROVED_CHANGE/);
-    assert.match(result.output, /Результат этого вызова скрыт/);
+    assertQuarantine(result.output, "post");
+    assert.match(result.output, /Аргументы или результат изменились/);
+    assert.doesNotMatch(result.output, /Подозревается хакерская атака/);
+    assert.deepEqual(f.aborts, []);
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("classifier denial reason reaches both pre refusal and redacted post feedback", async () => {
+  const reason = "Описание инструмента содержит попытку подмены инструкций.";
+  const ui = new UI();
+  ui.ask = async () => "reject";
+  const f = await setup(
+    async (request) =>
+      responseFor(request, { status: "ok", decision: "deny", reason, error: null }),
+    ui,
+  );
+  try {
+    await assert.rejects(f.hooks["tool.execute.before"](input, { args }), (error: unknown) => {
+      assert.ok(error instanceof ActionRejectedError);
+      assertQuarantine(error.message, "pre", reason);
+      assert.match(
+        error.message,
+        /Подозревается хакерская атака; это предупреждение, а не подтверждённый факт/,
+      );
+      assert.doesNotMatch(error.message, /Тестовый карантин/);
+      return true;
+    });
+    const result = { title: "SECRET", output: "SECRET", metadata: { secret: "SECRET" } };
+    await f.hooks["tool.execute.after"]({ ...input, args }, result);
+    assertQuarantine(result.output, "post", reason);
+    assert.match(result.output, /Подозревается хакерская атака/);
+    assert.doesNotMatch(JSON.stringify(result), /SECRET/);
     assert.deepEqual(f.aborts, []);
   } finally {
     await f.cleanup();
@@ -365,11 +421,18 @@ test("confirmation UI failure cancels the action but a recovered UI can review t
   const ui = new UI();
   const ask = ui.ask.bind(ui);
   ui.ask = async () => {
-    throw new Error("UI unavailable");
+    throw new Error("PRIVATE_UI_DIAGNOSTIC");
   };
   const f = await setup(undefined, ui);
   try {
-    await assert.rejects(f.hooks["tool.execute.before"](input, { args }), ActionRejectedError);
+    await assert.rejects(f.hooks["tool.execute.before"](input, { args }), (error: unknown) => {
+      assert.ok(error instanceof ActionRejectedError);
+      assertQuarantine(error.message, "pre");
+      assert.match(error.message, /Подтверждение недоступно/);
+      assert.match(error.message, /Тестовая заглушка классификатора отклоняет все операции/);
+      assert.doesNotMatch(error.message, /PRIVATE_UI_DIAGNOSTIC|Подозревается хакерская атака/);
+      return true;
+    });
     await f.hooks["experimental.chat.system.transform"](
       { sessionID: input.sessionID },
       { system: [] },
@@ -392,10 +455,18 @@ test("an approval cannot authorize arguments mutated while user was deciding", a
   const f = await setup();
   try {
     const output = { args: { ...args } };
-    const before = f.hooks["tool.execute.before"](input, output);
-    const rejection = assert.rejects(before, ActionRejectedError);
+    const mutableInput = { ...input };
+    const before = f.hooks["tool.execute.before"](mutableInput, output);
+    const rejection = assert.rejects(before, (error: unknown) => {
+      assert.ok(error instanceof ActionRejectedError);
+      assertQuarantine(error.message, "pre");
+      assert.match(error.message, /Аргументы или результат изменились/);
+      assert.doesNotMatch(error.message, /Подозревается хакерская атака|UNAPPROVED_TOOL/);
+      return true;
+    });
     await pending(f.ui, 1);
     output.args.filePath = "/workspace/another-file";
+    mutableInput.tool = "UNAPPROVED_TOOL";
     f.ui.pending[0].resolve("allow");
     await rejection;
   } finally {
@@ -601,7 +672,9 @@ test("an aborted tool's late post is withheld without reopening approval or bloc
     assert.equal(completed, true, "A cancelled late post must finish without a new approval");
     assert.equal(f.ui.pending.length, 1);
     assert.doesNotMatch(JSON.stringify(result), /LATE_CANCELLED_RESULT/);
-    assert.match(result.output, /Результат этого вызова скрыт/);
+    assertQuarantine(result.output, "post");
+    assert.match(result.output, /Текущая проверка отменена OpenCode/);
+    assert.doesNotMatch(result.output, /Подозревается хакерская атака|Пользователь отклонил/);
 
     const next = f.hooks["tool.execute.before"]({ ...input, callID: "after_late_post" }, { args });
     await pending(f.ui, 2);
@@ -618,7 +691,13 @@ test("invalid Unicode arguments cancel just this action", async () => {
   try {
     await assert.rejects(
       f.hooks["tool.execute.before"](input, { args: { text: "\ud800" } }),
-      ActionRejectedError,
+      (error: unknown) => {
+        assert.ok(error instanceof ActionRejectedError);
+        assertQuarantine(error.message, "pre");
+        assert.match(error.message, /Внутренняя ошибка сбора контекста или проверки контракта/);
+        assert.doesNotMatch(error.message, /Подозревается хакерская атака|Error:| at /);
+        return true;
+      },
     );
     const next = f.hooks["tool.execute.before"]({ ...input, callID: "valid" }, { args });
     await pending(f.ui, 1);

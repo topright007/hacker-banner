@@ -32,7 +32,7 @@ async function request(path,options={}){
 }
 function createCard(item){
  const card=element("article");card.className="warning";
- const warning=element("p","Предупреждение: классификатор отклонил эту операцию. Требуется ваше решение.");warning.className="warning-title";card.append(warning,element("h2",item.tool));
+ const warning=element("p","Карантин: классификатор отклонил эту операцию. Требуется ваше решение. Карантин относится только к этому вызову инструмента.");warning.className="warning-title";card.append(warning,element("h2",item.tool));
  card.append(element("p",item.phase==="pre_tool_call"?"До выполнения: инструмент ещё не запущен и ожидает вашего решения. «Продолжить» разрешит эту операцию. «Отменить действие» отменит только её.":"После выполнения: инструмент уже выполнился. Результат удерживается и пока не передан агенту. «Передать результат» разрешит его передачу, «Скрыть результат» — заменит его безопасной заглушкой. Уже выполненное действие не отменяется; повторного запуска не будет."));
  card.append(element("p","Причина предупреждения классификатора:"));card.append(element("pre",item.reason));
  card.append(element("p","Аргументы инструмента:"));card.append(element("pre",item.arguments));

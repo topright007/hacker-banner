@@ -106,6 +106,36 @@ async function decide(control: Control, approval: Approval, decision: "allow" | 
   assert.equal(response.status, 200, `Approval decision failed: ${await response.text()}`);
 }
 
+function assertQuarantineFeedback(messages: Json[], tool: string, phase: "pre" | "post") {
+  const result = messages.find((message) => message.tool_call_id === "call_smoke_first");
+  assert.ok(result, "Quarantined call feedback never reached the model");
+  let feedback =
+    typeof result.content === "string"
+      ? result.content
+      : result.content.map((part: Json) => part.text ?? "").join("\n");
+  try {
+    const envelope = JSON.parse(feedback) as Json;
+    if (typeof envelope.error?.message === "string") feedback = envelope.error.message;
+  } catch {
+    // A regular tool result is already plain text; native errors may use a JSON envelope.
+  }
+  assert.ok(
+    feedback.includes(
+      phase === "pre"
+        ? "[OpenCode Sensor] Карантин: действие заблокировано."
+        : "[OpenCode Sensor] Карантин: передача результата заблокирована.",
+    ),
+    "Model-bound quarantine feedback lost its action-specific status",
+  );
+  assert.ok(feedback.includes(`Инструмент: ${JSON.stringify(tool)}`));
+  assert.ok(feedback.includes(`Этап: ${phase === "pre" ? "до выполнения" : "после выполнения"}`));
+  assert.match(feedback, /Причина:.*Тестовая заглушка классификатора отклоняет все операции/);
+  assert.ok(feedback.includes("Безопасность этого действия не проверялась."));
+  assert.ok(feedback.includes("Тестовый карантин"), "Stub denial was presented as a real attack");
+  assert.ok(feedback.includes("Сессия остаётся доступной."));
+  assert.ok(feedback.includes("Не повторяйте это действие без нового разрешения пользователя."));
+}
+
 async function assertAuditContext(directory: string, approval: Approval, label: string) {
   const request = JSON.parse(
     await readFile(join(directory, "requests", `${approval.request_id}.json`), "utf8"),
@@ -655,26 +685,10 @@ async function runScenario(scenario: Scenario, toolKind: ToolKind = "shell") {
     } else if (scenario === "reject-pre") {
       assert.equal(await exists(marker), false, "Rejected operation created its marker");
       assert.equal(resultForwarded, false, "Rejected pre call produced a private result");
-      assert.ok(
-        forwardedResults.some(
-          (message) =>
-            message.tool_call_id === "call_smoke_first" &&
-            JSON.stringify(message.content).includes("пользователь отменил это действие"),
-        ),
-        "Pre rejection did not become a tool error visible to the model",
-      );
+      assertQuarantineFeedback(forwardedResults, pre.tool, "pre");
     } else {
       assert.equal(resultForwarded, false, "Rejected post result reached the model");
-      assert.ok(
-        forwardedResults.some(
-          (message) =>
-            message.tool_call_id === "call_smoke_first" &&
-            JSON.stringify(message.content).includes(
-              "Результат этого вызова скрыт: передача не разрешена",
-            ),
-        ),
-        "Rejected post result was not replaced with the safe cancellation placeholder",
-      );
+      assertQuarantineFeedback(forwardedResults, pre.tool, "post");
       const messages = await serverRequest(
         `/session/${pre.session_id}/message?directory=${encodeURIComponent(workdir)}`,
       );

@@ -5,7 +5,7 @@ import { ApprovalServer } from "./approval-server.js";
 import { AuditLog } from "./audit.js";
 import { denyAllClassifier, type Classifier } from "./classifier.js";
 import { ContextCollector } from "./collector.js";
-import { ActionRejectedError } from "./gates.js";
+import { ActionRejectedError, type QuarantineCause } from "./gates.js";
 import {
   assertResponse,
   bindRequest,
@@ -203,6 +203,16 @@ export async function createSensor(
   ): Promise<void> {
     const observedAt = Date.now();
     const sessionID = hookInput.sessionID as string;
+    // Preserve the tool identity even if another hook mutates the live input.
+    const tool = hookInput.tool;
+    const rejection = (cause: QuarantineCause, classifierReason?: string | null) =>
+      new ActionRejectedError({
+        phase,
+        tool,
+        cause,
+        classifierReason,
+        testClassifier: classifier === denyAllClassifier,
+      });
     const checkpointToken = Symbol();
     const pending = { sessionID, cancelled: false };
     executingCheckpoints.set(checkpointToken, pending);
@@ -210,10 +220,7 @@ export async function createSensor(
     let call: Invocation | undefined;
     let released = false;
     const ensureCurrent = () => {
-      if (closed || pending.cancelled || call?.cancelled)
-        throw new ActionRejectedError(
-          "Sensor: проверка этого действия отменена. Новое действие можно подтвердить отдельно.",
-        );
+      if (closed || pending.cancelled || call?.cancelled) throw rejection("cancelled");
     };
     try {
       // Detach before the first await; an approval binds this exact input/output.
@@ -310,9 +317,8 @@ export async function createSensor(
             decision = await approvals.ask(request, response);
           } catch {
             // A UI failure is not a classifier outage and must never auto-allow.
-            throw new ActionRejectedError(
-              "Sensor: подтверждение недоступно. Это действие отменено; сессия остаётся доступной.",
-            );
+            ensureCurrent();
+            throw rejection("confirmation_unavailable", response.reason);
           }
           ensureCurrent();
           if (decision === "reject") {
@@ -322,7 +328,7 @@ export async function createSensor(
               "deny",
               "Пользователь отклонил этот checkpoint.",
             );
-            throw new ActionRejectedError();
+            throw rejection("user_rejected", response.reason);
           }
           await record(
             request,
@@ -339,9 +345,7 @@ export async function createSensor(
         digest(originalInput) !== digest(jsonCopy(hookInput)) ||
         digest(originalOutput) !== digest(liveOutput)
       ) {
-        throw new ActionRejectedError(
-          "Sensor: аргументы или результат изменились во время подтверждения. Действие отменено; разрешение устарело.",
-        );
+        throw rejection("snapshot_changed");
       }
       released = true;
     } catch (error) {
@@ -362,9 +366,7 @@ export async function createSensor(
       } catch {
         /* Logging cannot authorize the failed checkpoint. */
       }
-      throw new ActionRejectedError(
-        "Sensor: проверка этого действия завершилась ошибкой. Действие отменено; сессия остаётся доступной.",
-      );
+      throw rejection("internal_failure");
     } finally {
       executingCheckpoints.delete(checkpointToken);
       if (key && (phase === "post_tool_call" || !released) && active.get(key) === call)
@@ -373,33 +375,43 @@ export async function createSensor(
   }
 
   async function after(data: Native, output: Native | undefined): Promise<void> {
+    const tool = data.tool;
     try {
       await checkpoint("post_tool_call", data, output);
     } catch (error) {
       if (!output || typeof output !== "object") {
         // V1 has special paths with no mutable result: never pretend we redacted it.
-        throw new ActionRejectedError(
-          "Sensor: передача результата отменена. Этот путь OpenCode не предоставил изменяемый результат.",
-        );
+        throw new ActionRejectedError({
+          phase: "post_tool_call",
+          tool,
+          cause: "unmodifiable_result",
+        });
       }
       const message =
-        "[OpenCode Sensor] Результат этого вызова скрыт: передача не разрешена. Не повторяйте действие без нового разрешения пользователя. Уже выполненные действия не отменены.";
+        error instanceof ActionRejectedError
+          ? error.message
+          : new ActionRejectedError({ phase: "post_tool_call", tool, cause: "internal_failure" })
+              .message;
       // V1 passes the original object by reference. Clear every field, including
       // MCP content/structuredContent/_meta and builtin attachments/metadata.
       // Populate both safe shapes because MCP extensions can mimic builtin keys.
       for (const key of Reflect.ownKeys(output)) {
         if (!Reflect.deleteProperty(output, key))
-          throw new ActionRejectedError("Sensor: не удалось скрыть результат этого вызова.");
+          throw new ActionRejectedError({
+            phase: "post_tool_call",
+            tool,
+            cause: "redaction_failure",
+          });
       }
       Object.assign(output, {
-        title: "Результат скрыт сенсором",
+        title: "Карантин: результат скрыт сенсором",
         output: message,
         metadata: {},
         attachments: [],
         content: [{ type: "text", text: message }],
         isError: true,
       });
-      notify(error instanceof Error ? error.message : "Передача результата отменена.");
+      notify(message);
     }
   }
 
