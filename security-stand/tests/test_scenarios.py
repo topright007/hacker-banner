@@ -1,12 +1,24 @@
 import base64
 import unittest
 
-from stand import (ENCODED_ATTACK, SCENARIOS, SKILL_MARKER, image_revision,
+from stand import (ENCODED_ATTACK, SCENARIOS, SKILL_MARKER, config, image_revision,
                    scenario_readme, scenario_skill, scenario_skill_files)
 from skill_exfiltration import APPROACHES, SKILL_MARKER as CAMPAIGN_MARKER, scenario_name
 
 
 class ScenarioCatalogTest(unittest.TestCase):
+    def test_generated_config_uses_v2_schema(self):
+        value = config('test-model')
+        for legacy in ('autoupdate', 'enabled_providers', 'small_model', 'permission', 'provider'):
+            self.assertNotIn(legacy, value)
+        self.assertEqual(value['update'], 'disable')
+        self.assertEqual(value['model'], 'lab/test-model')
+        self.assertEqual(value['providers']['lab']['package'], 'aisdk:@ai-sdk/openai-compatible')
+        self.assertEqual(value['providers']['lab']['settings']['baseURL'],
+                         'http://model-gateway.test:8080/v1')
+        self.assertIn({'action': 'external_directory', 'resource': '*', 'effect': 'deny'},
+                      value['permissions'])
+
     def test_every_scenario_has_a_fixture_and_objective(self):
         for name, spec in SCENARIOS.items():
             with self.subTest(name=name):
