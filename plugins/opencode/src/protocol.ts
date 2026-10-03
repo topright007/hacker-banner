@@ -17,7 +17,7 @@ export type ClassifierRequest = Native & {
 };
 export interface ClassifierResponse {
   contract: "opencode-plugin-classifier";
-  contract_version: "1.0.0";
+  contract_version: "1.1.0";
   request_id: string;
   phase: Phase;
   binding_digest: string;
@@ -99,7 +99,7 @@ export function responseFor(
 ): ClassifierResponse {
   return {
     contract: "opencode-plugin-classifier",
-    contract_version: "1.0.0",
+    contract_version: "1.1.0",
     request_id: request.request_id,
     phase: request.phase,
     binding_digest: request.decision_binding.digest,

@@ -55,8 +55,31 @@
     "unavailable is not a classifier allow verdict"
   ],
   "limitations": [
-    "No implemented plugin or live OpenCode integration test.",
+    "The original contract report predates plugin implementation; runtime validation is recorded separately in plugins/opencode/validation-report.json.",
     "Replay samples are conservative reconstructions, not live hook recordings.",
     "JSON Schema does not enforce every cross-field relation; plugin must perform binding/ID/phase/correlation checks."
-  ]
+  ],
+  "historical_report_provenance": "The base validator, native compatibility counts and original cross-field/negative checks below are retained from the 1.0.0 report. They are not a new live runtime run; current_revision_validation lists checks rerun for 1.1.0.",
+  "current_revision_validation": {
+    "contract_version": "1.1.0",
+    "plugin_version": "0.1.1",
+    "validated_at": "2026-10-03",
+    "validator": "Ajv 8.17.1 / Draft 2020-12 and plugin protocol bindRequest/assertResponse",
+    "schemas_checked": 3,
+    "examples_validated": 9,
+    "request_rfc8785_bindings_verified": 5,
+    "response_bindings_and_evidence_pointers_verified": 3,
+    "recorded_prior_approval_bindings_verified": 1,
+    "replay_native_payloads_unchanged": 2,
+    "canonical_and_embedded_schemas_identical": true,
+    "negative_checks": [
+      "Request schema rejects the former 1.0.0 version.",
+      "Request schema rejects block_session_tree_and_request_abort / keep_blocked enforcement."
+    ],
+    "focused_tests": {
+      "command": "node --import tsx --test test/approval-page.test.ts test/collector.test.ts",
+      "passed": 17
+    },
+    "scope": "Contract fixtures, per-action UI and collector embedding only. No new claim about the historical native compatibility counts or runtime live checks."
+  }
 }

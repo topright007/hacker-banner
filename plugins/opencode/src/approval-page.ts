@@ -4,10 +4,10 @@ export function approvalPage(nonce: string): string {
 <html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>OpenCode — подтверждение операции</title>
 <style nonce="${nonce}">
-body{font:16px system-ui,sans-serif;max-width:880px;margin:40px auto;padding:0 20px;background:#f6f7f9;color:#20252c}h1{font-size:26px}article{background:white;border:1px solid #cdd3da;border-radius:10px;padding:22px;margin:20px 0}h2{font-size:20px}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f0f2f5;padding:14px;border-radius:6px;max-height:340px;overflow:auto}button{font:inherit;padding:10px 16px;margin:6px 10px 0 0;border-radius:6px;border:1px solid #adb5c0;cursor:pointer}button.reject{background:#a52424;color:white;border-color:#a52424}button:disabled{opacity:.5;cursor:wait}.note{color:#545e6b}.error{color:#a52424}p{overflow-wrap:anywhere}
+body{font:16px system-ui,sans-serif;max-width:880px;margin:40px auto;padding:0 20px;background:#f6f7f9;color:#20252c}h1{font-size:26px}article{background:white;border:1px solid #cdd3da;border-radius:10px;padding:22px;margin:20px 0}.warning{border:2px solid #b91c1c;background:#fff5f5}.warning-title{color:#991b1b;font-weight:700}h2{font-size:20px}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f0f2f5;padding:14px;border-radius:6px;max-height:340px;overflow:auto}button{font:inherit;padding:10px 16px;margin:6px 10px 0 0;border-radius:6px;border:1px solid #adb5c0;cursor:pointer}button.reject{background:#a52424;color:white;border-color:#a52424}button:disabled{opacity:.5;cursor:wait}.note{color:#545e6b}.error{color:#a52424}p{overflow-wrap:anywhere}
 </style></head><body>
-<h1>Подтверждение операций OpenCode</h1>
-<p class="note">Решение относится только к указанной операции. Штатные разрешения OpenCode продолжают действовать.</p>
+<h1>Предупреждения безопасности OpenCode</h1>
+<p class="note">Каждое решение относится только к указанной операции и не блокирует сессию. Штатные разрешения OpenCode продолжают действовать.</p>
 <p id="status" role="status">Подключение…</p><main id="pending"></main>
 <script nonce="${nonce}">
 "use strict";
@@ -31,9 +31,10 @@ async function request(path,options={}){
  return response.json();
 }
 function createCard(item){
- const card=element("article");card.append(element("h2",item.tool));
- card.append(element("p",item.phase==="pre_tool_call"?"До выполнения: инструмент ещё не запущен.":"После выполнения: инструмент уже выполнился. Разрешение передаст его результат агенту; повторного запуска не будет."));
- card.append(element("p","Классификатор отклонил операцию:"));card.append(element("pre",item.reason));
+ const card=element("article");card.className="warning";
+ const warning=element("p","Предупреждение: классификатор отклонил эту операцию. Требуется ваше решение.");warning.className="warning-title";card.append(warning,element("h2",item.tool));
+ card.append(element("p",item.phase==="pre_tool_call"?"До выполнения: инструмент ещё не запущен и ожидает вашего решения. «Продолжить» разрешит эту операцию. «Отменить действие» отменит только её.":"После выполнения: инструмент уже выполнился. Результат удерживается и пока не передан агенту. «Передать результат» разрешит его передачу, «Скрыть результат» — заменит его безопасной заглушкой. Уже выполненное действие не отменяется; повторного запуска не будет."));
+ card.append(element("p","Причина предупреждения классификатора:"));card.append(element("pre",item.reason));
  card.append(element("p","Аргументы инструмента:"));card.append(element("pre",item.arguments));
  if(item.phase==="post_tool_call"){card.append(element("p","Предварительный просмотр результата:"));card.append(element("pre",item.result));}
  card.append(element("p","Длинные аргументы и результаты сокращаются с явной пометкой. Полный неизменный запрос, связанный с этим решением, доступен в JSON."));
@@ -44,7 +45,7 @@ function createCard(item){
    const objectURL=URL.createObjectURL(await response.blob());const link=element("a");link.href=objectURL;link.download="request-"+item.id+".json";document.body.append(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(objectURL),1000);
   }catch(error){setStatus(error.message,true);}finally{download.disabled=false;}});card.append(download);
  card.append(element("p","Сессия: "+item.session_id+" · Запрос: "+item.request_id));
- const allow=element("button","Разрешить один раз"),reject=element("button","Остановить сессию");reject.className="reject";
+ const allow=element("button",item.phase==="pre_tool_call"?"Продолжить":"Передать результат"),reject=element("button",item.phase==="pre_tool_call"?"Отменить действие":"Скрыть результат");reject.className="reject";
  const decide=async decision=>{allow.disabled=true;reject.disabled=true;try{
    await request("/api/decision",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id:item.id,phase:item.phase,binding_digest:item.binding_digest,decision})});
    card.remove();cards.delete(item.id);await refresh();

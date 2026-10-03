@@ -1,57 +1,95 @@
 {
+  "plugin_version": "0.1.1",
+  "contract_version": "1.1.0",
   "opencode_version": "1.18.11",
   "node_version": "24.19.0",
   "platform": "macOS arm64",
+  "validated_at": "2026-10-03T10:19:41.727962+00:00",
   "build": "passed",
   "typecheck": "passed",
   "format_check": "passed",
   "unit_and_component_tests": {
-    "passed": 36,
-    "failed": 0
+    "passed": 44,
+    "failed": 0,
+    "groups": {
+      "sensor": 15,
+      "collector": 9,
+      "approval_page": 8,
+      "approval_server": 12
+    }
   },
   "live_tests": {
-    "passed": 3,
+    "passed": 6,
     "failed": 0,
-    "model": "local deterministic OpenAI-compatible server",
+    "model": "local deterministic OpenAI-compatible server; no external LLM",
     "scenarios": [
-      "pre/post allow once",
-      "pre rejection prevents file write and further calls",
-      "post rejection prevents model receiving tool result and further calls"
-    ]
+      "shell approve pre/post",
+      "shell reject pre, then another approved action and same-session new user turn",
+      "shell reject post masks result, then another approved action and same-session new user turn",
+      "direct MCP approve pre/post",
+      "direct MCP reject pre, then another approved action and same-session new user turn",
+      "direct MCP reject post masks result, then another approved action and same-session new user turn"
+    ],
+    "limitations": "Shell/MCP development runs preceded the final cancellation-edge rebuild; final packaged verification runs against the final bundle."
+  },
+  "packaged_live_tests": {
+    "status": "passed",
+    "passed": 6,
+    "failed": 0,
+    "installation": "Fresh extracted ZIP; bundled single JS file without plugin node_modules",
+    "checksums": "all matched",
+    "scenarios": [
+      "shell/approve",
+      "shell/reject-pre",
+      "shell/reject-post",
+      "mcp/approve",
+      "mcp/reject-pre",
+      "mcp/reject-post"
+    ],
+    "continuation": "All four rejection scenarios verified a separately approved next action and next user turn in the same session with the same server/plugin control identity.",
+    "context_collection_errors": 0,
+    "bundle_includes_final_cancellation_fix": true
   },
   "live_context": {
-    "checkpoints_verified": 5,
-    "collection_errors": 0,
     "observed": [
-      "native session info",
-      "full available session messages",
+      "native session information and full available messages",
       "actual message/part/call correlation",
       "agent/provider/model identity",
-      "configuration projection",
       "system and messages hook observations",
-      "registry tool descriptions"
+      "ordinary builtin tool definitions",
+      "raw MCP content/resource/structuredContent/_meta at post before masking"
+    ],
+    "MCP_definitions": "Direct MCP definitions are not exposed by V1 registry/tool.definition; definition_ids remain empty and match is unknown, rather than invented."
+  },
+  "review": {
+    "status": "complete; no unresolved findings in this change",
+    "fixed": [
+      "Refusal no longer latches session/tree or aborts adjacent calls.",
+      "All own builtin/MCP result fields are replaced in place before normal result release.",
+      "Cancellation during approval initialization cannot leave an orphan card.",
+      "An abort-ignoring tool late post after native error/idle is discarded without reopening approval; regression failed before fix and passed after."
     ]
   },
-  "review": "Independent review of the P2 coverage/MCP preview fixes and approval reload recovery completed without new findings. The previously identified startup P1 remains open.",
-  "limits": [
-    "Always-deny stub does not classify threats.",
-    "Live smoke uses builtin bash; child/MCP/partial API cases are covered by component tests, not a live remote MCP server.",
-    "Known OpenCode V1 limitations are documented in README.md.",
-    "Approval reload regression executes actual inline page JavaScript with a simulated browser environment; no automated real-browser reload test was run."
-  ],
-  "validated_at": "2026-10-03",
   "regressions_verified": [
-    "Native availability fields and forged envelopes preserve valid coverage and real API errors.",
-    "Native availability fields reach classifier and user confirmation in both pre and post phases.",
-    "MCP extension output and numeric keys cannot replace actual content in the preview; immutable JSON retains all fields.",
-    "Structured MCP results and builtin attachments remain visible even with empty output.",
-    "Actual approval page JavaScript restores this tab's capability after reload and prefers a new URL capability.",
-    "Blocked, full or silently failing sessionStorage preserves the fragment for recovery."
+    "Concurrent approvals remain independently bound and cannot be replayed.",
+    "Same-session next action and user turn work after pre/post rejection without plugin reload.",
+    "UI failure and mutated approved values cancel only the affected checkpoint.",
+    "Actual page JS implements red per-action warning, bound continue/cancel buttons and tab capability recovery."
+  ],
+  "limits": [
+    "Always-deny stub does not detect threats. Classifier unavailability intentionally fails open.",
+    "Live tests use builtin shell and direct local MCP; special slash/subtask and experimental background execution are outside this live suite.",
+    "V1 ordinary tool exceptions can bypass post. Previously emitted metadata, external side effects and truncation files cannot be retracted.",
+    "Special slash/subtask pre refusal may end the current turn; it installs no session latch. This path may copy attachments before post. Background completion messages bypass the original post checkpoint.",
+    "No OS sandbox, exact final provider payload or complete ordinary MCP definition catalog is provided.",
+    "Known startup failure remains: if initialization fails before hooks are returned, OpenCode may continue without sensor enforcement.",
+    "Observed journals and cancelled invocation records are not automatically restored or rotated; a cancelled invocation is retained until a late post or session deletion."
   ],
   "known_open_findings": [
     {
       "severity": "P1",
-      "summary": "If plugin initialization fails, OpenCode can continue without sensor hooks. Fixing this was outside the requested P2/reload scope."
+      "summary": "Plugin initialization failure may leave OpenCode without sensor hooks; unchanged and outside the requested per-action cancellation fix."
     }
-  ]
+  ],
+  "tested_bundle_sha256": "489d73822274c94c2d51f1b6f4342ccdec782b4bf8fa85a8a91d8f6174ad1ed9"
 }

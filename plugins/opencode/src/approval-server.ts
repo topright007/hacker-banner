@@ -72,7 +72,7 @@ export class ApprovalServer {
   private readonly token = randomBytes(32).toString("hex");
   private readonly instanceID = randomBytes(16).toString("hex");
   private readonly pending = new Map<string, Pending>();
-  private readonly cancelledSessions = new Set<string>();
+  private readonly cancellationGeneration = new Map<string, number>();
   private readonly usedRequestIDs = new Set<string>();
   private readonly retiredIDs = new Set<string>();
   private readonly requestTimes: number[] = [];
@@ -102,13 +102,14 @@ export class ApprovalServer {
     // Capture before the first await: callers cannot change what the human reviews.
     const requestJSON = JSON.stringify(request);
     const snapshot = JSON.parse(requestJSON);
+    const sessionID = snapshot?.current_call?.session_id;
+    const generation = this.cancellationGeneration.get(sessionID) ?? 0;
     await this.start();
-    if (this.closed) return "reject";
+    if (this.closed || generation !== (this.cancellationGeneration.get(sessionID) ?? 0))
+      return "reject";
     const requestID = snapshot?.request_id;
     const phase = snapshot?.phase;
     const digest = snapshot?.decision_binding?.digest;
-    const sessionID = snapshot?.current_call?.session_id;
-    if (this.cancelledSessions.has(sessionID)) return "reject";
     if (
       typeof requestID !== "string" ||
       !requestID ||
@@ -157,7 +158,11 @@ export class ApprovalServer {
 
   cancelSession(sessionIDs: string[]): void {
     const sessions = new Set(sessionIDs);
-    for (const sessionID of sessions) this.cancelledSessions.add(sessionID);
+    for (const sessionID of sessions)
+      this.cancellationGeneration.set(
+        sessionID,
+        (this.cancellationGeneration.get(sessionID) ?? 0) + 1,
+      );
     for (const [id, item] of this.pending) {
       if (sessions.has(item.view.session_id)) this.settle(id, "reject");
     }

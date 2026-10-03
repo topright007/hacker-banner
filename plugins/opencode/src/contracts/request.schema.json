@@ -5,7 +5,7 @@
       "const": "opencode-plugin-classifier"
     },
     "contract_version": {
-      "const": "1.0.0"
+      "const": "1.1.0"
     },
     "request_id": {
       "type": "string",
@@ -2838,7 +2838,6 @@
                 "open",
                 "awaiting_classifier",
                 "awaiting_user",
-                "blocked",
                 "unknown"
               ]
             },
@@ -2865,7 +2864,8 @@
             "scope_session_ids",
             "reason"
           ],
-          "additionalProperties": false
+          "additionalProperties": false,
+          "description": "Current checkpoint wait state. scope_session_ids contains only the current call session when observed. This compatibility field does not represent a persistent session/tree lock."
         }
       },
       "required": [
@@ -4446,10 +4446,10 @@
           "const": "allow_once_for_bound_checkpoint"
         },
         "user_reject": {
-          "const": "block_session_tree_and_request_abort"
+          "const": "reject_tool_call_or_withhold_result"
         },
         "user_no_response": {
-          "const": "keep_blocked"
+          "const": "keep_checkpoint_pending"
         },
         "classifier_timeout_ms": {
           "type": "integer",
@@ -4465,7 +4465,7 @@
         "classifier_timeout_ms"
       ],
       "additionalProperties": false,
-      "description": "Policy chosen for MVP. Classifier transport timeout/unavailable is fail-open and audited. Human waiting/rejection is not classifier unavailability. Post override releases this result, not permission to undo/re-run the tool. Native OpenCode restrictions still apply."
+      "description": "Per-checkpoint policy. Classifier transport timeout/unavailable is fail-open and audited. Classifier deny waits for a bound human decision. User rejection skips the pre tool call or replaces the entire post result with a safe placeholder; it does not lock the session or session tree. No human response keeps only this checkpoint pending. Post allow releases this result without undoing or re-running the tool. Native OpenCode restrictions still apply."
     }
   },
   "allOf": [

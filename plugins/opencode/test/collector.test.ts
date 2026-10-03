@@ -193,7 +193,7 @@ function bindCollected(input: any, data: any) {
   const isPre = input.phase === "pre_tool_call";
   return bindRequest({
     contract: "opencode-plugin-classifier",
-    contract_version: "1.0.0",
+    contract_version: "1.1.0",
     request_id: "request",
     phase: input.phase,
     harness: { name: "opencode", version: "1.18.11", plugin_api: "v1" },
@@ -224,8 +224,8 @@ function bindCollected(input: any, data: any) {
       classifier_unavailable: "allow_with_harness_permissions",
       classifier_deny: "ask_user",
       user_allow: "allow_once_for_bound_checkpoint",
-      user_reject: "block_session_tree_and_request_abort",
-      user_no_response: "keep_blocked",
+      user_reject: "reject_tool_call_or_withhold_result",
+      user_no_response: "keep_checkpoint_pending",
       classifier_timeout_ms: 1000,
     },
   });

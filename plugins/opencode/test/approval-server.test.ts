@@ -320,7 +320,7 @@ test("MCP preview includes actual content despite a deceptive output extension",
   ).json();
   assert.deepEqual(fullRequest.current_call.result.native, native);
   const html = await (await fetch(`${f.url.origin}/`)).text();
-  assert.ok(html.includes("Классификатор отклонил операцию"));
+  assert.ok(html.includes("классификатор отклонил эту операцию"));
   assert.ok(html.includes("Скачать полный запрос JSON"));
   assert.ok(html.includes("Предварительный просмотр результата"));
   assert.ok(!html.includes("считает операцию небезопасной"));
@@ -400,18 +400,14 @@ test("structured MCP output and builtin attachments are not replaced by empty ou
   }
 });
 
-test("cancelSession before ask prevents registration without blocking a different session", async (t) => {
+test("new calls in the same session remain reviewable after cancellation", async (t) => {
   const f = await fixture(t);
   f.server.cancelSession(["session-a"]);
-  const a = checkpoint("cancel-before-ask");
-  assert.equal(await f.server.ask(a.request, a.response), "reject");
-  assert.equal(f.server.pendingCount, 0);
-  const b = checkpoint("unaffected-session", "session-b");
-  const answerB = f.server.ask(b.request, b.response);
+  const sample = checkpoint("new-call-after-cancel");
+  const answer = f.server.ask(sample.request, sample.response);
   const [item] = await pendingCount(f, 1);
-  assert.equal(item.session_id, "session-b");
   assert.equal((await f.decide(item, "allow")).status, 200);
-  assert.equal(await answerB, "allow");
+  assert.equal(await answer, "allow");
 });
 
 test("cancelSession during initial server start cannot leave an orphan approval", async (t) => {

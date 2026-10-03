@@ -11,7 +11,7 @@ import {
   type ClassifierResponse,
   responseFor,
 } from "../src/protocol.js";
-import { SessionBlockedError, SessionGates } from "../src/gates.js";
+import { ActionRejectedError } from "../src/gates.js";
 import type { Classifier } from "../src/classifier.js";
 
 class UI implements ApprovalUI {
@@ -194,27 +194,84 @@ test("default stub waits independently on pre and post; writes bound full reques
   }
 });
 
-test("human rejection latches session and blocks future tools/model hooks", async () => {
+test("human rejection cancels only that tool and later model/tool requests remain available", async () => {
   const f = await setup();
   try {
     const before = f.hooks["tool.execute.before"](input, { args });
-    const rejection = assert.rejects(before, SessionBlockedError);
+    const rejection = assert.rejects(before, ActionRejectedError);
     await pending(f.ui, 1);
     f.ui.pending[0].resolve("reject");
     await rejection;
-    await assert.rejects(
-      f.hooks["tool.execute.before"]({ ...input, callID: "next" }, { args }),
-      SessionBlockedError,
+    await f.hooks["experimental.chat.system.transform"](
+      { sessionID: input.sessionID, model: {} },
+      { system: [] },
     );
-    await assert.rejects(
-      f.hooks["experimental.chat.system.transform"](
-        { sessionID: input.sessionID, model: {} },
-        { system: [] },
-      ),
-      SessionBlockedError,
+    await f.hooks["chat.headers"]({ sessionID: input.sessionID }, { headers: {} });
+    const next = f.hooks["tool.execute.before"]({ ...input, callID: "next" }, { args });
+    await pending(f.ui, 2);
+    f.ui.pending[1].resolve("allow");
+    await next;
+    assert.deepEqual(f.aborts, []);
+    const decisions = (await readFile(join(f.directory, "decisions.jsonl"), "utf8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    assert.ok(decisions.every((entry) => entry.scope === "call"));
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("post rejection scrubs builtin and MCP data in place without blocking continuation", async () => {
+  const f = await setup();
+  try {
+    const result = {
+      title: "SECRET_TITLE",
+      output: "SECRET_OUTPUT",
+      metadata: { secret: "SECRET_META" },
+      attachments: [{ type: "file", url: "data:text/plain,SECRET_ATTACHMENT" }],
+      content: [{ type: "text", text: "SECRET_MCP" }],
+      structuredContent: { secret: "SECRET_STRUCTURED" },
+      _meta: { secret: "SECRET_MCP_META" },
+      extension: "SECRET_EXTENSION",
+    };
+    const original = result;
+    const after = f.hooks["tool.execute.after"]({ ...input, args }, result);
+    await pending(f.ui, 1);
+    f.ui.pending[0].resolve("reject");
+    await after;
+    assert.equal(result, original);
+    assert.doesNotMatch(JSON.stringify(result), /SECRET/);
+    assert.match(result.output, /Результат этого вызова скрыт/);
+    assert.deepEqual(result.metadata, {});
+    assert.deepEqual(result.attachments, []);
+    assert.deepEqual(result.content, [{ type: "text", text: result.output }]);
+    await f.hooks["experimental.chat.system.transform"](
+      { sessionID: input.sessionID },
+      { system: [] },
     );
-    assert.equal(f.ui.pending.length, 1);
-    assert.ok(f.aborts.includes(input.sessionID));
+    const next = f.hooks["tool.execute.before"]({ ...input, callID: "after_post" }, { args });
+    await pending(f.ui, 2);
+    f.ui.pending[1].resolve("allow");
+    await next;
+    assert.deepEqual(f.aborts, []);
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("post mutation while the user approves masks the changed result", async () => {
+  const f = await setup();
+  try {
+    const result = { title: "README", output: "original", metadata: {} };
+    const after = f.hooks["tool.execute.after"]({ ...input, args }, result);
+    await pending(f.ui, 1);
+    result.output = "UNAPPROVED_CHANGE";
+    f.ui.pending[0].resolve("allow");
+    await after;
+    assert.doesNotMatch(JSON.stringify(result), /UNAPPROVED_CHANGE/);
+    assert.match(result.output, /Результат этого вызова скрыт/);
+    assert.deepEqual(f.aborts, []);
   } finally {
     await f.cleanup();
   }
@@ -304,16 +361,28 @@ test("classifier outage and timeout fail open, but never create a human approval
   }
 });
 
-test("confirmation UI failure remains blocked rather than using classifier fail-open", async () => {
+test("confirmation UI failure cancels the action but a recovered UI can review the next call", async () => {
   const ui = new UI();
+  const ask = ui.ask.bind(ui);
   ui.ask = async () => {
     throw new Error("UI unavailable");
   };
   const f = await setup(undefined, ui);
   try {
-    await assert.rejects(f.hooks["tool.execute.before"](input, { args }), SessionBlockedError);
-    await assert.rejects(f.hooks["tool.execute.before"](input, { args }), SessionBlockedError);
-    assert.ok(f.aborts.includes(input.sessionID));
+    await assert.rejects(f.hooks["tool.execute.before"](input, { args }), ActionRejectedError);
+    await f.hooks["experimental.chat.system.transform"](
+      { sessionID: input.sessionID },
+      { system: [] },
+    );
+    ui.ask = ask;
+    const next = f.hooks["tool.execute.before"](
+      { ...input, callID: "after_ui_recovery" },
+      { args },
+    );
+    await pending(ui, 1);
+    ui.pending[0].resolve("allow");
+    await next;
+    assert.deepEqual(f.aborts, []);
   } finally {
     await f.cleanup();
   }
@@ -324,7 +393,7 @@ test("an approval cannot authorize arguments mutated while user was deciding", a
   try {
     const output = { args: { ...args } };
     const before = f.hooks["tool.execute.before"](input, output);
-    const rejection = assert.rejects(before, SessionBlockedError);
+    const rejection = assert.rejects(before, ActionRejectedError);
     await pending(f.ui, 1);
     output.args.filePath = "/workspace/another-file";
     f.ui.pending[0].resolve("allow");
@@ -346,7 +415,7 @@ test("harness cancellation during collection cannot create a late approval or re
       return get();
     };
     const before = f.hooks["tool.execute.before"](input, { args });
-    const rejection = assert.rejects(before, SessionBlockedError);
+    const rejection = assert.rejects(before, ActionRejectedError);
     for (let n = 0; n < 100 && !finish; n++) await delay(1);
     assert.ok(finish);
     // Harness may persist the aborted tool before announcing session idle.
@@ -376,7 +445,12 @@ test("harness cancellation during collection cannot create a late approval or re
     finish();
     await rejection;
     assert.equal(f.ui.pending.length, 0);
-    await assert.rejects(f.hooks["tool.execute.before"](input, { args }), SessionBlockedError);
+    f.client.session.get = get;
+    const next = f.hooks["tool.execute.before"]({ ...input, callID: "new_turn" }, { args });
+    await pending(f.ui, 1);
+    f.ui.pending[0].resolve("allow");
+    await next;
+    assert.deepEqual(f.aborts, []);
   } finally {
     await f.cleanup();
   }
@@ -421,28 +495,137 @@ test("wrong classifier binding is rejected and audited as unavailable", async ()
   }
 });
 
-test("tree gate keeps other pending decisions; rejection applies to subsequently discovered child", async () => {
-  const parents = new Map<string, string | null>([
-    ["root", null],
-    ["child", "root"],
-    ["unrelated", null],
-  ]);
-  const gates = new SessionGates(parents);
-  gates.hold("root", "one");
-  gates.hold("child", "two");
-  let released = false;
-  const waiting = gates.wait("root").then(() => {
-    released = true;
-  });
-  gates.release("one");
-  await delay(5);
-  assert.equal(released, false);
-  await gates.wait("unrelated");
-  gates.release("two");
-  await waiting;
-  gates.block("child");
-  parents.set("new-child", "root");
-  await assert.rejects(gates.wait("new-child"), SessionBlockedError);
-  await gates.wait("unrelated");
-  gates.close();
+test("rejecting a parallel call leaves siblings and child-session approvals independent", async () => {
+  const f = await setup();
+  try {
+    const first = f.hooks["tool.execute.before"](input, { args });
+    const rejected = assert.rejects(first, ActionRejectedError);
+    await f.hooks.event({
+      event: {
+        type: "session.created",
+        properties: { info: { id: "child", parentID: input.sessionID } },
+      },
+    });
+    const sibling = f.hooks["tool.execute.before"]({ ...input, callID: "sibling" }, { args });
+    const child = f.hooks["tool.execute.before"](
+      { ...input, sessionID: "child", callID: "child_call" },
+      { args },
+    );
+    await pending(f.ui, 3);
+    const denied = f.ui.pending.find(
+      (item) => item.request.current_call.hook_call_id === input.callID,
+    )!;
+    denied.resolve("reject");
+    await rejected;
+    for (const item of f.ui.pending.filter((item) => item !== denied)) item.resolve("allow");
+    await Promise.all([sibling, child]);
+    assert.deepEqual(f.aborts, []);
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("native idle cancels a pending approval but the same session accepts a new action", async () => {
+  const f = await setup();
+  try {
+    const before = f.hooks["tool.execute.before"](input, { args });
+    const rejected = assert.rejects(before, ActionRejectedError);
+    await pending(f.ui, 1);
+    await f.hooks.event({
+      event: {
+        type: "session.status",
+        properties: { sessionID: input.sessionID, status: { type: "idle" } },
+      },
+    });
+    await rejected;
+    const next = f.hooks["tool.execute.before"]({ ...input, callID: "new_call" }, { args });
+    await pending(f.ui, 2);
+    f.ui.pending[1].resolve("allow");
+    await next;
+    const decisions = (await readFile(join(f.directory, "decisions.jsonl"), "utf8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    assert.equal(
+      decisions.filter(
+        (entry) => entry.source === "plugin.user_override" && entry.decision === "deny",
+      ).length,
+      0,
+    );
+    assert.deepEqual(f.aborts, []);
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("an aborted tool's late post is withheld without reopening approval or blocking new calls", async () => {
+  const f = await setup();
+  try {
+    const before = f.hooks["tool.execute.before"](input, { args });
+    await pending(f.ui, 1);
+    f.ui.pending[0].resolve("allow");
+    await before;
+    // An abort-ignoring tool can return after OpenCode has persisted its error
+    // part and announced idle; no checkpoint is executing during these events.
+    await f.hooks.event({
+      event: {
+        type: "message.part.updated",
+        properties: {
+          part: {
+            id: "part_read",
+            type: "tool",
+            tool: "read",
+            callID: input.callID,
+            sessionID: input.sessionID,
+            messageID: "msg_assistant",
+            state: {
+              status: "error",
+              input: args,
+              error: "Tool execution aborted",
+              metadata: { interrupted: true },
+              time: { start: 3, end: 4 },
+            },
+          },
+        },
+      },
+    });
+    await f.hooks.event({
+      event: {
+        type: "session.status",
+        properties: { sessionID: input.sessionID, status: { type: "idle" } },
+      },
+    });
+    const result = { title: "Late result", output: "LATE_CANCELLED_RESULT", metadata: {} };
+    const after = f.hooks["tool.execute.after"]({ ...input, args }, result);
+    const completed = await Promise.race([after.then(() => true), delay(100).then(() => false)]);
+    assert.equal(completed, true, "A cancelled late post must finish without a new approval");
+    assert.equal(f.ui.pending.length, 1);
+    assert.doesNotMatch(JSON.stringify(result), /LATE_CANCELLED_RESULT/);
+    assert.match(result.output, /Результат этого вызова скрыт/);
+
+    const next = f.hooks["tool.execute.before"]({ ...input, callID: "after_late_post" }, { args });
+    await pending(f.ui, 2);
+    f.ui.pending[1].resolve("allow");
+    await next;
+    assert.deepEqual(f.aborts, []);
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("invalid Unicode arguments cancel just this action", async () => {
+  const f = await setup();
+  try {
+    await assert.rejects(
+      f.hooks["tool.execute.before"](input, { args: { text: "\ud800" } }),
+      ActionRejectedError,
+    );
+    const next = f.hooks["tool.execute.before"]({ ...input, callID: "valid" }, { args });
+    await pending(f.ui, 1);
+    f.ui.pending[0].resolve("allow");
+    await next;
+    assert.deepEqual(f.aborts, []);
+  } finally {
+    await f.cleanup();
+  }
 });
