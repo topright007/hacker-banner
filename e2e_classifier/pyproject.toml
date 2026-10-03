@@ -11,11 +11,14 @@ dependencies = ["fastapi>=0.115,<1", "pydantic>=2,<3", "httpx>=0.27,<1", "uvicor
 
 [project.optional-dependencies]
 test = ["pytest>=8,<10"]
+ml = ["scikit-learn>=1.5,<2"]
+fasttext = ["fasttext==0.9.3", "scikit-learn>=1.5,<2"]
 
 [project.scripts]
 agent-monitor = "agent_monitor.cli:main"
 monitor-fixtures = "agent_monitor.fixtures:main"
 monitor-benchmarks = "agent_monitor.benchmarks:main"
+action-risk = "agent_monitor.action_risk.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -23,4 +26,3 @@ where = ["src"]
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]
-

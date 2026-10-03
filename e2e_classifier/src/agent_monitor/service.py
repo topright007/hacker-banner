@@ -20,8 +20,21 @@ def token_hash(token: str) -> str:
 
 
 class Monitor:
-    def __init__(self, store: Store, policy: Policy, clock=time.time):
+    def __init__(self, store: Store, policy: Policy, clock=time.time, risk_model=None):
         self.store, self.policy, self.clock = store, policy, clock
+        self.risk_shadow = None
+        if risk_model is not None:
+            from .action_risk.shadow import RiskShadow
+            self.risk_shadow = RiskShadow(risk_model)
+
+    def _observe_risk(self, run, source, value):
+        if self.risk_shadow is not None:
+            try:
+                self.risk_shadow.observe(run["id"], source, value, run["workspace"])
+            except Exception:
+                # Optional observations never turn classifier/parser faults into
+                # a new policy verdict. Discard stale context; next score abstains.
+                self.risk_shadow.forget(run["id"])
 
     def register(self, request: RunCreate) -> dict:
         if request.profile not in self.policy.data["profiles"]:
@@ -100,6 +113,15 @@ class Monitor:
                     return response
 
             assessment = self.policy.assess(run, action)
+            if self.risk_shadow is not None:
+                try:
+                    risk = self.risk_shadow.score(run, self.policy.data["profiles"][run["profile"]], action)
+                except Exception as exc:
+                    # Optional shadow instrumentation cannot grant permission or
+                    # change the deterministic decision, even on inference error.
+                    risk = {"mode": "shadow", "abstain": True, "alert": None, "error": type(exc).__name__}
+                self._event(db, run["id"], f"risk:{request.call_id}", request_hash,
+                            {"type": "action_risk", "call_id": request.call_id, **risk, "time": self.clock()})
             reasons = list(assessment.reasons)
             if run["state_gap"]:
                 reasons.append("P11_INCOMPLETE_SECURITY_STATE")
@@ -186,6 +208,11 @@ class Monitor:
                 "sensitive_run": run["sensitive"], "time": self.clock()})
             db.execute("UPDATE calls SET status='completed' WHERE run_id=? AND call_id=?", (run["id"], request.call_id))
             self.store.save_run(db, run)
+            if self.risk_shadow is not None:
+                decision_event = db.execute("SELECT body FROM events WHERE run_id=? AND event_id=?",
+                    (run["id"], f"decision:{json.loads(row['response'])['decision_id']}")).fetchone()
+                self._observe_risk(run, "tool", {
+                    "tool": json.loads(decision_event["body"])["tool"], "result": request.result})
         return {"recorded": True, "sensitive_run": run["sensitive"]}
 
     def content(self, request: ContentEvent, token: str):
@@ -198,6 +225,8 @@ class Monitor:
             if new and sensitive:
                 self._taint(run)
                 self.store.save_run(db, run)
+            if new and self.risk_shadow is not None:
+                self._observe_risk(run, request.source, request.text)
         return {"recorded": True, "findings": findings, "sensitive_run": run["sensitive"]}
 
     def approve(self, approval_id: str, approved: bool):
@@ -229,4 +258,6 @@ class Monitor:
             run = json.loads(row["state"])
             run["closed"] = True
             self.store.save_run(db, run)
+        if self.risk_shadow is not None:
+            self.risk_shadow.forget(run_id)
         return {"closed": True}

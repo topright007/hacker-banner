@@ -10,12 +10,17 @@ from .service import Monitor, MonitorError
 from .store import Store
 
 
-def create_app(db_path=None, policy_path=None, admin_token=None):
+def create_app(db_path=None, policy_path=None, admin_token=None, risk_model_path=None):
     admin_token = admin_token or os.environ.get("MONITOR_ADMIN_TOKEN")
     if not admin_token or len(admin_token) < 24:
         raise RuntimeError("Set MONITOR_ADMIN_TOKEN to a random token of at least 24 characters")
+    risk_model_path = risk_model_path or os.environ.get("MONITOR_ACTION_RISK_MODEL")
+    risk_model = None
+    if risk_model_path:
+        from .action_risk.model import ActionRiskModel
+        risk_model = ActionRiskModel.load(risk_model_path)
     monitor = Monitor(Store(db_path or os.environ.get("MONITOR_DB", ".monitor/state.sqlite")),
-                      Policy(policy_path or os.environ.get("MONITOR_POLICY", "config/policies.yaml")))
+                      Policy(policy_path or os.environ.get("MONITOR_POLICY", "config/policies.yaml")), risk_model=risk_model)
     app = FastAPI(title="Agent Monitor", version="0.1.0")
     app.state.monitor = monitor
 
