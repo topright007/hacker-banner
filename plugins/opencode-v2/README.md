@@ -1,6 +1,6 @@
 # OpenCode Sensor V2
 
-Плагин **0.4.1** для **OpenCode 2.0.22**. Контракт заглушки — **2.3.0**,
+Плагин **0.4.2** для **OpenCode 2.0.22**. Контракт заглушки — **2.3.0**,
 контракт Agent Monitor — **2.2.0**.
 Поддерживается только V2. Старая реализация `plugins/opencode` для OpenCode 1.18.11
 сохранена как legacy; её разработка и исправления прекращены.
@@ -69,7 +69,7 @@ JSON контекста и stack trace в форме не показываютс
 
 ## Установка готовой сборки
 
-1. Распакуйте `opencode-sensor-v2-0.4.1.zip` в постоянную папку. Сохраните всю
+1. Распакуйте `opencode-sensor-v2-0.4.2.zip` в постоянную папку. Сохраните всю
    папку, включая `index.js` и `package.json`: OpenCode подключает локальную папку
    пакета. `opencode-sensor-v2.mjs` содержит runtime-зависимости и обе JSON Schema;
    отдельная установка npm-зависимостей для готовой сборки не нужна.
@@ -86,7 +86,7 @@ JSON контекста и stack trace в форме не показываютс
   "$schema": "https://opencode.ai/config.json",
   "plugins": [
     {
-      "package": "/ABSOLUTE/PATH/opencode-sensor-v2-0.4.1",
+      "package": "/ABSOLUTE/PATH/opencode-sensor-v2-0.4.2",
       "options": {
         "enabled": true,
         "apiTimeoutMs": 5000,
@@ -98,7 +98,7 @@ JSON контекста и stack trace в форме не показываютс
 ```
 
 Замените путь на абсолютный путь к распакованной папке, например
-`/Users/you/Downloads/opencode-sensor-v2-0.4.1`. В V2 нужен массив `plugins` и объект
+`/Users/you/Downloads/opencode-sensor-v2-0.4.2`. В V2 нужен массив `plugins` и объект
 `{package, options}`; формат V1 здесь не подходит.
 
 4. Перезапустите фоновый сервис командой `opencode service restart` и перезапустите
@@ -145,7 +145,7 @@ dependencies включён OpenCode 2.0.22; запустить его можн�
 
 ```json
 {
-  "package": "/ABSOLUTE/PATH/opencode-sensor-v2-0.4.1",
+  "package": "/ABSOLUTE/PATH/opencode-sensor-v2-0.4.2",
   "options": { "enabled": false }
 }
 ```
@@ -204,7 +204,7 @@ agent-monitor register \
 {
   "plugins": [
     {
-      "package": "/ABSOLUTE/PATH/opencode-sensor-v2-0.4.1",
+      "package": "/ABSOLUTE/PATH/opencode-sensor-v2-0.4.2",
       "options": {
         "enabled": true,
         "backend": "agent_monitor",
