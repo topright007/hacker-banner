@@ -146,6 +146,9 @@ export async function createSensor(
       : join(homedir(), ".local", "state", "opencode-sensor-v2", "quarantine"),
   );
   const quarantinedHere = new Set<string>();
+  // A verified candidate tree is held while its ancestry is rechecked after the
+  // user's choice. This closes the window for parallel approval releases.
+  const pendingRootQuarantines = new Set<string>();
   const parents = new Map<string, string | null>();
   const classifier = dependencies.classifier ?? denyAllClassifier;
   let sequence = 0;
@@ -184,45 +187,71 @@ export async function createSensor(
       onNotice: (message) => notice(message),
     });
 
+  async function readParent(sessionID: string): Promise<string | null> {
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const info: { id: string; parentID?: string } = await Promise.race([
+        ctx.session.get({ sessionID }, { signal: controller.signal }),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => {
+            controller.abort();
+            reject(new Error("Session ancestry timeout"));
+          }, apiTimeoutMs);
+        }),
+      ]);
+      if (
+        !info ||
+        info.id !== sessionID ||
+        (info.parentID != null &&
+          (typeof info.parentID !== "string" ||
+            !info.parentID.trim() ||
+            Buffer.byteLength(info.parentID, "utf8") > 1024))
+      )
+        throw new Error("Session ancestry unavailable");
+      return info.parentID ?? null;
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
+  async function resolveRoot(sessionID: string, expectedRoot: string): Promise<string> {
+    const lineage = new Map<string, string | null>();
+    let current = sessionID;
+    while (true) {
+      if (lineage.has(current) || lineage.size >= 64) throw new Error("Invalid session ancestry");
+      // Always re-read the harness; collected context alone is not authority to
+      // quarantine a different session, even when it says root_resolved=true.
+      const parent = await readParent(current);
+      lineage.set(current, parent);
+      if (parent === null) {
+        if (current !== expectedRoot)
+          throw new Error("Session root differs from the bound snapshot");
+        // Invalid or changed ancestry must not poison the previously verified
+        // cache and make an unrelated parent inherit the initiating latch.
+        for (const [id, value] of lineage) parents.set(id, value);
+        return current;
+      }
+      current = parent;
+    }
+  }
+
+  function hasLocalQuarantine(sessionID: string): boolean {
+    return quarantinedHere.has(sessionID) || pendingRootQuarantines.has(sessionID);
+  }
+
   async function isQuarantined(sessionID: string): Promise<boolean> {
     const seen = new Set<string>();
     let current: string | null = sessionID;
     while (current) {
       if (seen.has(current) || seen.size >= 64) throw new Error("Invalid session ancestry");
       seen.add(current);
-      if (quarantinedHere.has(current) || (await quarantine.isQuarantined(current))) return true;
-      if (!parents.has(current)) {
-        const known = collector.knownParents.get(current);
-        if (known !== undefined) parents.set(current, known);
-        else {
-          const controller = new AbortController();
-          let timer: ReturnType<typeof setTimeout> | undefined;
-          try {
-            const info: { id: string; parentID?: string } = await Promise.race([
-              ctx.session.get({ sessionID: current }, { signal: controller.signal }),
-              new Promise<never>((_, reject) => {
-                timer = setTimeout(() => {
-                  controller.abort();
-                  reject(new Error("Session ancestry timeout"));
-                }, apiTimeoutMs);
-              }),
-            ]);
-            if (
-              !info ||
-              info.id !== current ||
-              (info.parentID != null && typeof info.parentID !== "string")
-            )
-              throw new Error("Session ancestry unavailable");
-            parents.set(current, info.parentID ?? null);
-          } finally {
-            if (timer) clearTimeout(timer);
-          }
-        }
-      }
+      if (hasLocalQuarantine(current) || (await quarantine.isQuarantined(current))) return true;
+      if (!parents.has(current)) parents.set(current, await readParent(current));
       current = parents.get(current)!;
     }
     // A concurrent answer may have arrived during an ancestry/storage read.
-    return [...seen].some((id) => quarantinedHere.has(id));
+    return [...seen].some(hasLocalQuarantine);
   }
 
   function knownDescendants(sessionID: string): string[] {
@@ -243,9 +272,9 @@ export async function createSensor(
     const seen = new Set<string>();
     let current: string | null | undefined = sessionID;
     while (current && !seen.has(current)) {
-      if (quarantinedHere.has(current)) return true;
+      if (hasLocalQuarantine(current)) return true;
       seen.add(current);
-      current = parents.get(current) ?? collector.knownParents.get(current);
+      current = parents.has(current) ? parents.get(current) : collector.knownParents.get(current);
     }
     return false;
   }
@@ -266,7 +295,8 @@ export async function createSensor(
     source: "plugin.classifier" | "plugin.user_override" | "plugin.monitor",
     decision: string,
     reason: string | null,
-    scope: "call" | "session" = "call",
+    scope: "call" | "session" | "session_tree" = "call",
+    quarantineRootSessionID?: string,
   ): Promise<void> {
     const entry = {
       decision_id: id("decision"),
@@ -280,6 +310,7 @@ export async function createSensor(
       decision,
       reason,
       scope,
+      ...(quarantineRootSessionID ? { quarantine_root_session_id: quarantineRootSessionID } : {}),
       binding_digest: request.decision_binding.digest,
       decided_at_ms: Date.now(),
       native: source === "plugin.monitor" ? { monitor_run_id: monitor?.monitorRunID } : null,
@@ -440,7 +471,7 @@ export async function createSensor(
       ensureCurrent();
       const request = bindRequest({
         contract: "opencode-plugin-classifier",
-        contract_version: monitor ? "2.2.0" : "2.3.0",
+        contract_version: monitor ? "2.2.0" : "2.4.0",
         request_id: id("req"),
         phase,
         harness: { name: "opencode", version: ctx.app.version, plugin_api: "v2" },
@@ -490,7 +521,7 @@ export async function createSensor(
           classifier_timeout_ms: monitor ? apiTimeoutMs : classifierTimeoutMs,
           ...(monitor
             ? { backend: "agent_monitor", monitor_run_id: monitor.monitorRunID }
-            : { user_quarantine: "persist_session_and_descendants_chat_only" }),
+            : { user_quarantine: "persist_root_and_descendants_chat_only" }),
         },
       });
       try {
@@ -563,6 +594,16 @@ export async function createSensor(
           await record(request, "plugin.classifier", response.decision!, response.reason);
           ensureCurrent();
           if (response.decision === "deny") {
+            const scope = request.context.session_scope;
+            if (scope?.root_resolved !== true || typeof scope.root_session_id !== "string")
+              throw reject("quarantine_unavailable");
+            let quarantineRoot: string;
+            try {
+              quarantineRoot = await resolveRoot(sessionID, scope.root_session_id);
+            } catch {
+              // Do not offer an approval for a tree whose root is unknown.
+              throw reject("quarantine_unavailable");
+            }
             let decision: ApprovalDecision;
             try {
               await ensureToolAccess();
@@ -598,24 +639,50 @@ export async function createSensor(
             }
             if (decision === "quarantine") {
               ensureCurrent();
-              // Latch synchronously before any I/O; pending siblings cannot race an
-              // allow against this decision. Cancelling cards never aborts the LLM.
+              // The initiating branch is blocked synchronously even if root
+              // verification or durable storage subsequently fails.
               quarantinedHere.add(sessionID);
               approvals.cancelSession(knownDescendants(sessionID));
-              let saved = true;
+              pendingRootQuarantines.add(quarantineRoot);
+              approvals.cancelSession(knownDescendants(quarantineRoot));
+              let verifiedRoot: string | undefined;
+              let saved = false;
               try {
-                await quarantine.activate(sessionID);
-              } catch {
-                saved = false;
+                try {
+                  verifiedRoot = await resolveRoot(sessionID, quarantineRoot);
+                  quarantinedHere.add(verifiedRoot);
+                  approvals.cancelSession(knownDescendants(verifiedRoot));
+                } catch {
+                  // Persist only the initiating branch when ancestry cannot
+                  // be verified. A guessed ancestor must never become a root.
+                }
+                try {
+                  await quarantine.activate(verifiedRoot ?? sessionID);
+                  saved = true;
+                } catch {
+                  // In-memory latches stay active when persistence fails.
+                }
+              } finally {
+                pendingRootQuarantines.delete(quarantineRoot);
               }
+              if (!verifiedRoot)
+                notify(
+                  "Не удалось подтвердить корневую сессию: карантин включён только для текущей ветки.",
+                );
               await record(
                 request,
                 "plugin.user_override",
                 "deny",
-                "Пользователь выбрал режим карантина: только общение, все инструменты заблокированы.",
-                "session",
+                verifiedRoot
+                  ? "Пользователь выбрал карантин всей задачи: у корня и всех потомков доступны только текстовые ответы."
+                  : "Корень не подтверждён: карантин включён только для текущей ветки.",
+                verifiedRoot ? "session_tree" : "session",
+                verifiedRoot,
               );
-              throw reject(saved ? "user_quarantined" : "quarantine_unavailable", response.reason);
+              throw reject(
+                saved && verifiedRoot ? "user_quarantined" : "quarantine_unavailable",
+                response.reason,
+              );
             }
             await ensureToolAccess();
             if (decision === "reject") {

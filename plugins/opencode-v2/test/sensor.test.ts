@@ -229,7 +229,8 @@ test("registered V2 hooks hold each pre/post and persist bound context", async (
     await pending(f.ui, 1);
     assert.equal(done, false);
     const first = f.ui.pending[0].request;
-    assert.equal(first.contract_version, "2.3.0");
+    assert.equal(first.contract_version, "2.4.0");
+    assert.equal(first.enforcement.user_quarantine, "persist_root_and_descendants_chat_only");
     assert.equal(first.harness.plugin_api, "v2");
     assert.equal(first.current_call.message_id, input.messageID);
     assert.equal(first.current_call.identity.model.model_id, "test-model");
@@ -486,6 +487,11 @@ test("quarantine reports the captured tool identity when a pending event changes
 test("rejecting one parallel checkpoint does not reject sibling or child operations", async () => {
   const f = await setup();
   try {
+    f.sessions.ses_child = {
+      ...f.sessions.ses_test,
+      id: "ses_child",
+      parentID: input.sessionID,
+    };
     f.hooks.event({
       type: "session.created",
       data: { sessionID: "ses_child", parentID: input.sessionID },
@@ -955,7 +961,12 @@ test("explicit quarantine blocks parallel and child tools without interrupting t
       .split("\n")
       .map((x) => JSON.parse(x));
     assert.equal(
-      decisions.filter((d) => d.source === "plugin.user_override" && d.scope === "session").length,
+      decisions.filter(
+        (d) =>
+          d.source === "plugin.user_override" &&
+          d.scope === "session_tree" &&
+          d.quarantine_root_session_id === "ses_test",
+      ).length,
       1,
     );
   } finally {
@@ -1180,6 +1191,409 @@ test("another plugin instance quarantines a pending form without another user an
   } finally {
     await second?.dispose();
     await f.cleanup();
+  }
+});
+
+function nestedSessions(fixture: ReturnType<typeof fixtureContext>): void {
+  const { sessions } = fixture;
+  for (const [id, parentID] of [
+    ["ses_parent", "ses_test"],
+    ["ses_grandchild", "ses_parent"],
+    ["ses_sibling", "ses_test"],
+    ["ses_unrelated", undefined],
+  ] as const)
+    sessions[id] = { ...sessions.ses_test, id, ...(parentID ? { parentID } : {}) };
+}
+
+async function assertTreeChatOnly(hooks: Record<string, any>, sessionIDs: string[]): Promise<void> {
+  for (const sessionID of sessionIDs) {
+    for (const name of ["context", "compaction", "generate"]) {
+      const context = modelContext(sessionID);
+      const messages = structuredClone(context.messages);
+      await hooks[`session.${name}`](context);
+      assert.deepEqual(context.tools, {}, `${sessionID}/${name} restored tools`);
+      assert.deepEqual(context.messages, messages);
+      assert.match(context.system.map((part) => part.text).join("\n"), /только общение/);
+    }
+    await assert.rejects(
+      hooks["tool.execute.before"]({ ...input, sessionID, id: `blocked_${sessionID}` }),
+      ActionRejectedError,
+    );
+    const result = {
+      ...post(),
+      sessionID,
+      id: `late_${sessionID}`,
+      result: { content: "PRIVATE_TREE_RESULT", metadata: { secret: "PRIVATE_TREE_METADATA" } },
+    };
+    await hooks["tool.execute.after"](result);
+    assert.doesNotMatch(JSON.stringify(result.result), /PRIVATE_TREE_/);
+    assert.match(String(result.result.content), /Режим карантина/);
+  }
+}
+
+test("grandchild pre quarantine covers the verified root tree and pending parallel allow decisions", async () => {
+  const ui = new UI();
+  const cancelled: string[][] = [];
+  // Simulate replies already accepted by the host: cancelling their cards cannot
+  // withdraw those replies, so the execution barrier must reject them itself.
+  ui.cancelSession = (ids: string[]) => {
+    cancelled.push(ids);
+  };
+  const f = await setup(undefined, ui, {}, nestedSessions);
+  let releaseLookup!: () => void;
+  const lookupGate = new Promise<void>((resolve) => {
+    releaseLookup = resolve;
+  });
+  let resolvingRoot = false;
+  let rootReleased = false;
+  let siblingReleased = false;
+  try {
+    const child = assert.rejects(
+      f.hooks["tool.execute.before"]({
+        ...input,
+        sessionID: "ses_grandchild",
+        id: "child_quarantine",
+      }),
+      ActionRejectedError,
+    );
+    const root = assert.rejects(
+      f.hooks["tool.execute.before"]({ ...input, id: "root_wait" }).then(() => {
+        rootReleased = true;
+      }),
+      ActionRejectedError,
+    );
+    const sibling = assert.rejects(
+      f.hooks["tool.execute.before"]({
+        ...input,
+        sessionID: "ses_sibling",
+        id: "sibling_wait",
+      }).then(() => {
+        siblingReleased = true;
+      }),
+      ActionRejectedError,
+    );
+    await pending(f.ui, 3);
+    const childApproval = f.ui.pending.find(
+      (item) => item.request.current_call.tool_call_id === "child_quarantine",
+    )!;
+    assert.equal(childApproval.request.context.session_scope.root_resolved, true);
+    assert.equal(childApproval.request.context.session_scope.root_session_id, "ses_test");
+    const originalGet = f.ctx.session.get;
+    f.ctx.session.get = async (request: any, options: any) => {
+      if (request.sessionID === "ses_grandchild") {
+        resolvingRoot = true;
+        await lookupGate;
+      }
+      return originalGet(request, options);
+    };
+    childApproval.resolve("quarantine");
+    for (let i = 0; i < 100 && !resolvingRoot; i++) await delay(1);
+    assert.equal(resolvingRoot, true, "Quarantine must freshly verify the root ancestry");
+    f.ui.pending
+      .find((item) => item.request.current_call.tool_call_id === "root_wait")!
+      .resolve("allow");
+    f.ui.pending
+      .find((item) => item.request.current_call.tool_call_id === "sibling_wait")!
+      .resolve("allow");
+    await delay(15);
+    assert.equal(
+      rootReleased,
+      false,
+      "Parallel root allow escaped while quarantine ancestry was resolving",
+    );
+    assert.equal(
+      siblingReleased,
+      false,
+      "Parallel sibling allow escaped while quarantine ancestry was resolving",
+    );
+    releaseLookup();
+    await Promise.all([child, root, sibling]);
+    assert.ok(cancelled.some((ids) => ids.includes("ses_test") && ids.includes("ses_sibling")));
+    f.ctx.session.get = originalGet;
+    f.sessions.ses_new_descendant = {
+      ...f.sessions.ses_test,
+      id: "ses_new_descendant",
+      parentID: "ses_sibling",
+    };
+    await assertTreeChatOnly(f.hooks, [
+      "ses_test",
+      "ses_parent",
+      "ses_grandchild",
+      "ses_sibling",
+      "ses_new_descendant",
+    ]);
+    assert.equal(f.ui.pending.length, 3, "Tree quarantine must not ask for another tool approval");
+    const unrelated = modelContext("ses_unrelated");
+    await f.hooks["session.context"](unrelated);
+    assert.ok(unrelated.tools.read);
+    const independent = f.hooks["tool.execute.before"]({
+      ...input,
+      sessionID: "ses_unrelated",
+      id: "unrelated_allowed",
+    });
+    await pending(f.ui, 4);
+    f.ui.pending[3].resolve("allow");
+    await independent;
+    const decisions = (await readFile(join(f.directory, "decisions.jsonl"), "utf8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    const activation = decisions.filter(
+      (entry) => entry.source === "plugin.user_override" && entry.scope === "session_tree",
+    );
+    assert.equal(activation.length, 1);
+    assert.equal(activation[0].session_id, "ses_grandchild");
+    assert.equal(activation[0].quarantine_root_session_id, "ses_test");
+    assert.equal(f.interrupts.length, 0);
+  } finally {
+    releaseLookup();
+    await f.cleanup();
+  }
+});
+
+test("grandchild post quarantine withholds success and error while closing every root-tree tool", async () => {
+  for (const status of ["completed", "error"] as const) {
+    const f = await setup(undefined, new UI(), {}, nestedSessions);
+    try {
+      const current = { ...input, sessionID: "ses_grandchild", id: `child_${status}` };
+      const before = f.hooks["tool.execute.before"](structuredClone(current));
+      await pending(f.ui, 1);
+      f.ui.pending[0].resolve("allow");
+      await before;
+      const event: any =
+        status === "completed"
+          ? {
+              ...current,
+              status,
+              result: { content: "PRIVATE_CHILD_RESULT", extension: "PRIVATE_CHILD_EXTENSION" },
+            }
+          : {
+              ...current,
+              status,
+              error: Object.assign(new Error("PRIVATE_CHILD_ERROR"), {
+                metadata: { secret: "PRIVATE_CHILD_METADATA" },
+              }),
+            };
+      const after = f.hooks["tool.execute.after"](event);
+      await pending(f.ui, 2);
+      f.ui.pending[1].resolve("quarantine");
+      await after;
+      assert.doesNotMatch(
+        JSON.stringify(status === "completed" ? event.result : event.error),
+        /PRIVATE_CHILD_/,
+      );
+      await assertTreeChatOnly(f.hooks, [
+        "ses_test",
+        "ses_parent",
+        "ses_grandchild",
+        "ses_sibling",
+      ]);
+      const unrelated = modelContext("ses_unrelated");
+      await f.hooks["session.context"](unrelated);
+      assert.ok(unrelated.tools.read);
+      assert.equal(f.ui.pending.length, 2);
+      assert.equal(f.interrupts.length, 0);
+    } finally {
+      await f.cleanup();
+    }
+  }
+});
+
+test("grandchild quarantine persists the root across shared instances and restart", async () => {
+  const f = await setup(undefined, new UI(), {}, nestedSessions);
+  let second: Record<string, any> | undefined;
+  let restarted: Record<string, any> | undefined;
+  try {
+    const secondContext = fixtureContext();
+    nestedSessions(secondContext);
+    const secondUI = new UI();
+    second = await createSensor(
+      secondContext.ctx,
+      { stateDirectory: f.directory, apiTimeoutMs: 100 },
+      { approvals: secondUI },
+    );
+    const heldRoot = assert.rejects(
+      second["tool.execute.before"]({ ...input, id: "other_instance_root" }),
+      ActionRejectedError,
+    );
+    await pending(secondUI, 1);
+    const child = assert.rejects(
+      f.hooks["tool.execute.before"]({ ...input, sessionID: "ses_grandchild", id: "persist_tree" }),
+      ActionRejectedError,
+    );
+    await pending(f.ui, 1);
+    f.ui.pending[0].resolve("quarantine");
+    await Promise.all([child, heldRoot]);
+    const markers = await Promise.all(
+      (await readdir(join(f.directory, "quarantine"))).map(async (name) =>
+        JSON.parse(await readFile(join(f.directory, "quarantine", name), "utf8")),
+      ),
+    );
+    assert.deepEqual(
+      markers.map((marker) => marker.session_id),
+      ["ses_test"],
+      "Only the confirmed root should be persisted",
+    );
+    await assertTreeChatOnly(second, ["ses_test", "ses_sibling", "ses_grandchild"]);
+    assert.equal(secondUI.pending.length, 1);
+    await second.dispose();
+    await f.hooks.dispose();
+    const restartContext = fixtureContext();
+    nestedSessions(restartContext);
+    restartContext.sessions.ses_future = {
+      ...restartContext.sessions.ses_test,
+      id: "ses_future",
+      parentID: "ses_sibling",
+    };
+    const ui = new UI();
+    let classifications = 0;
+    restarted = await createSensor(
+      restartContext.ctx,
+      { stateDirectory: f.directory, apiTimeoutMs: 100 },
+      {
+        approvals: ui,
+        classifier: async () => {
+          classifications++;
+          throw new Error("Classifier offline");
+        },
+      },
+    );
+    await assertTreeChatOnly(restarted, ["ses_test", "ses_parent", "ses_sibling", "ses_future"]);
+    assert.equal(
+      classifications,
+      0,
+      "Classifier fail-open must not restore a persisted quarantined tree",
+    );
+    assert.equal(ui.pending.length, 0);
+    const other = modelContext("ses_unrelated");
+    await restarted["session.context"](other);
+    assert.ok(other.tools.read);
+  } finally {
+    await restarted?.dispose();
+    await second?.dispose();
+    await f.cleanup();
+  }
+});
+
+test("allowing or cancelling a grandchild checkpoint never activates root quarantine", async () => {
+  for (const decision of ["allow", "reject"] as const) {
+    const f = await setup(undefined, new UI(), {}, nestedSessions);
+    try {
+      const child = f.hooks["tool.execute.before"]({
+        ...input,
+        sessionID: "ses_grandchild",
+        id: `child_${decision}`,
+      });
+      const completion = decision === "reject" ? assert.rejects(child, ActionRejectedError) : child;
+      await pending(f.ui, 1);
+      f.ui.pending[0].resolve(decision);
+      await completion;
+      const store = new QuarantineStore(join(f.directory, "quarantine"));
+      for (const sessionID of ["ses_test", "ses_parent", "ses_grandchild", "ses_sibling"]) {
+        assert.equal(await store.isQuarantined(sessionID), false);
+        const event = modelContext(sessionID);
+        await f.hooks["session.context"](event);
+        assert.ok(event.tools.read);
+      }
+      const root = f.hooks["tool.execute.before"]({ ...input, id: `root_after_${decision}` });
+      await pending(f.ui, 2);
+      f.ui.pending[1].resolve("allow");
+      await root;
+      assert.equal(f.interrupts.length, 0);
+    } finally {
+      await f.cleanup();
+    }
+  }
+});
+
+test("invalid or changed quarantine ancestry cannot persist an arbitrary root", async () => {
+  const scenarios = [
+    "missing",
+    "wrong-id",
+    "malformed-parent",
+    "cycle",
+    "root-parent-cycle",
+    "changed-root",
+    "timeout",
+    "unresolved-snapshot",
+  ] as const;
+  for (const scenario of scenarios) {
+    const f = await setup(undefined, new UI(), {}, nestedSessions);
+    try {
+      const originalGet = f.ctx.session.get;
+      if (scenario === "unresolved-snapshot") {
+        let childReads = 0;
+        f.ctx.session.get = async (request: any, options: any) => {
+          if (request.sessionID === "ses_grandchild" && ++childReads === 2) return undefined;
+          return originalGet(request, options);
+        };
+      }
+      const refused = assert.rejects(
+        f.hooks["tool.execute.before"]({
+          ...input,
+          sessionID: "ses_grandchild",
+          id: `invalid_${scenario}`,
+        }),
+        ActionRejectedError,
+      );
+      if (scenario === "unresolved-snapshot") {
+        await refused;
+        assert.equal(
+          f.ui.pending.length,
+          0,
+          "An unresolved snapshot must not offer a root quarantine decision",
+        );
+        f.ctx.session.get = originalGet;
+      } else {
+        await pending(f.ui, 1);
+        f.ctx.session.get = async (request: any, options: any) => {
+          if (scenario === "root-parent-cycle" && request.sessionID === "ses_test")
+            return { ...f.sessions.ses_test, parentID: "ses_grandchild" };
+          if (request.sessionID === "ses_grandchild") {
+            if (scenario === "missing") return undefined;
+            if (scenario === "wrong-id")
+              return { ...f.sessions.ses_grandchild, id: "ses_unrelated" };
+            if (scenario === "malformed-parent")
+              return { ...f.sessions.ses_grandchild, parentID: {} };
+            if (scenario === "cycle")
+              return { ...f.sessions.ses_grandchild, parentID: "ses_grandchild" };
+            if (scenario === "changed-root")
+              return { ...f.sessions.ses_grandchild, parentID: "ses_unrelated" };
+            if (scenario === "timeout") return new Promise(() => undefined);
+          }
+          return originalGet(request, options);
+        };
+      }
+      if (scenario !== "unresolved-snapshot") {
+        f.ui.pending[0].resolve("quarantine");
+        await refused;
+      }
+      f.ctx.session.get = originalGet;
+      const store = new QuarantineStore(join(f.directory, "quarantine"));
+      for (const sessionID of ["ses_test", "ses_unrelated", "ses_parent"])
+        assert.equal(
+          await store.isQuarantined(sessionID),
+          false,
+          `${scenario} persisted an unverified root`,
+        );
+      for (const sessionID of ["ses_test", "ses_unrelated"]) {
+        const event = modelContext(sessionID);
+        await f.hooks["session.context"](event);
+        assert.ok(event.tools.read, `${scenario} latched an unverified root in memory`);
+      }
+      const current = modelContext("ses_grandchild");
+      await f.hooks["session.context"](current);
+      if (scenario !== "unresolved-snapshot")
+        assert.deepEqual(
+          current.tools,
+          {},
+          `${scenario} reopened the current session after failed resolution`,
+        );
+      assert.equal(f.ui.pending.length, scenario === "unresolved-snapshot" ? 0 : 1);
+      assert.equal(f.interrupts.length, 0);
+    } finally {
+      await f.cleanup();
+    }
   }
 });
 

@@ -198,7 +198,7 @@ function fixture() {
 function bind(input: any, data: any) {
   return bindRequest({
     contract: "opencode-plugin-classifier",
-    contract_version: "2.3.0",
+    contract_version: "2.4.0",
     request_id: "request",
     phase: input.phase,
     harness: { name: "opencode", version: "2.0.22", plugin_api: "v2" },
@@ -232,7 +232,7 @@ function bind(input: any, data: any) {
       classifier_deny: "ask_user",
       user_allow: "allow_once_for_bound_checkpoint",
       user_reject: "reject_tool_call_or_withhold_result",
-      user_quarantine: "persist_session_and_descendants_chat_only",
+      user_quarantine: "persist_root_and_descendants_chat_only",
       user_no_response: "keep_checkpoint_pending",
       classifier_timeout_ms: 1000,
     },
@@ -242,7 +242,10 @@ function bind(input: any, data: any) {
 test("versioned contracts preserve legacy and monitor policies without accepting mixed enforcement", async () => {
   const { collector, pre } = fixture();
   const current = bind(pre, await collector.collect(pre));
-  assert.equal(current.contract_version, "2.3.0");
+  assert.equal(current.contract_version, "2.4.0");
+  const sessionScoped = jsonCopy(current);
+  sessionScoped.contract_version = "2.3.0";
+  sessionScoped.enforcement.user_quarantine = "persist_session_and_descendants_chat_only";
   const legacy = jsonCopy(current);
   legacy.contract_version = "2.1.0";
   delete legacy.enforcement.user_quarantine;
@@ -258,7 +261,7 @@ test("versioned contracts preserve legacy and monitor policies without accepting
     backend: "agent_monitor",
     monitor_run_id: "run_monitor",
   };
-  for (const input of [legacy, monitor, current]) {
+  for (const input of [legacy, monitor, sessionScoped, current]) {
     const request = bindRequest(input);
     const response = responseFor(request, {
       status: "ok",
@@ -273,7 +276,7 @@ test("versioned contracts preserve legacy and monitor policies without accepting
       () => assertResponse(request, { ...response, contract_version: different }),
       /different checkpoint/,
     );
-    for (const other of [legacy, monitor, current]) {
+    for (const other of [legacy, monitor, sessionScoped, current]) {
       if (other.contract_version === input.contract_version) continue;
       assert.throws(
         () => bindRequest({ ...input, enforcement: other.enforcement }),
@@ -287,6 +290,23 @@ test("versioned contracts preserve legacy and monitor policies without accepting
   const weakened = jsonCopy(monitor);
   weakened.enforcement.classifier_unavailable = "allow_with_harness_permissions";
   assert.throws(() => bindRequest(weakened), /Invalid classifier request/);
+});
+
+test("root-tree quarantine audit retains the initiating child and separately identifies its verified root", async () => {
+  const { collector, pre } = fixture();
+  collector.recordApproval({
+    decision_id: "decision_tree_quarantine",
+    source: "plugin.user_override",
+    session_id: "child",
+    scope: "session_tree",
+    quarantine_root_session_id: "root",
+    decision: "deny",
+  });
+  const request = bind(pre, await collector.collect(pre));
+  const decision = request.context.journal.approval_decisions.value[0];
+  assert.equal(decision.session_id, "child");
+  assert.equal(decision.scope, "session_tree");
+  assert.equal(decision.quarantine_root_session_id, "root");
 });
 
 test("collects public V2 data, real catalog schemas and direct hook identity without configuration secrets", async () => {

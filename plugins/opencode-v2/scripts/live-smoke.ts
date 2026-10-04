@@ -223,7 +223,7 @@ async function assertAuditContext(directory: string, approval: Approval, label: 
   assert.equal(request.request_id, approval.request_id);
   assert.equal(request.phase, approval.phase);
   assert.equal(request.decision_binding.digest, approval.binding_digest);
-  assert.equal(request.contract_version, "2.3.0");
+  assert.equal(request.contract_version, "2.4.0");
   assert.equal(request.harness.version, "2.0.22");
   const call = request.current_call;
   assert.ok(call.tool_call_id);
@@ -300,6 +300,7 @@ async function mockModel(
   const allRequests: Json[] = [];
   const primaryRequests: Json[] = [];
   const quarantineRequests: Json[] = [];
+  const treeProbeRequests: { label: string; request: Json }[] = [];
   const failures: string[] = [];
   const server = createServer(async (request, response) => {
     try {
@@ -318,7 +319,23 @@ async function mockModel(
         return;
       }
       const lastUser = body.messages.findLastIndex((item: Json) => item.role === "user");
-      const followup = JSON.stringify(body.messages[lastUser]).includes("FOLLOW_UP_TURN");
+      const lastPrompt = JSON.stringify(body.messages[lastUser]);
+      const followup = lastPrompt.includes("FOLLOW_UP_TURN");
+      const treeProbe = /ROOT_TREE_PROBE_([A-Z_]+)/.exec(lastPrompt)?.[1];
+      const independentRoot = lastPrompt.includes("ROOT_TREE_INDEPENDENT");
+      if (treeProbe) {
+        treeProbeRequests.push({ label: treeProbe, request: body });
+        complete(
+          response,
+          body,
+          {
+            role: "assistant",
+            content: `ROOT_TREE_COMPLETE_${treeProbe}`,
+          },
+          "stop",
+        );
+        return;
+      }
       const results = body.messages
         .slice(lastUser + 1)
         .filter(
@@ -328,7 +345,7 @@ async function mockModel(
       // Auxiliary title requests have no tool results or follow-up control
       // marker. Quarantined primary requests still need a normal text answer,
       // even though the harness no longer advertises tools to the model.
-      if (quarantinesSession(scenario) && (followup || !firstCall)) {
+      if (!independentRoot && quarantinesSession(scenario) && (followup || !firstCall)) {
         primaryRequests.push(body);
         quarantineRequests.push(body);
         complete(
@@ -386,12 +403,17 @@ async function mockModel(
         return;
       }
       primaryRequests.push(body);
-      if (firstCall || (!followup && scenario !== "approve" && results.length === 1)) {
-        const command = followup
-          ? `printf 'followup' > ${shellQuote(followupMarker)}; printf 'SMOKE_FOLLOWUP_RESULT'`
-          : firstCall
-            ? `printf 'executed' > ${shellQuote(marker)}; printf '%s' ${shellQuote(sentinel)}`
-            : `printf 'independent' > ${shellQuote(nextMarker)}; printf 'SMOKE_INDEPENDENT_RESULT'`;
+      if (
+        firstCall ||
+        (!independentRoot && !followup && scenario !== "approve" && results.length === 1)
+      ) {
+        const command = independentRoot
+          ? `printf 'root-independent' > ${shellQuote(join(dirname(marker), "root-independent-operation.txt"))}; printf 'ROOT_INDEPENDENT_RESULT'`
+          : followup
+            ? `printf 'followup' > ${shellQuote(followupMarker)}; printf 'SMOKE_FOLLOWUP_RESULT'`
+            : firstCall
+              ? `printf 'executed' > ${shellQuote(marker)}; printf '%s' ${shellQuote(sentinel)}`
+              : `printf 'independent' > ${shellQuote(nextMarker)}; printf 'SMOKE_INDEPENDENT_RESULT'`;
         complete(
           response,
           body,
@@ -400,11 +422,13 @@ async function mockModel(
             content: null,
             tool_calls: [
               {
-                id: followup
-                  ? "call_smoke_followup"
-                  : firstCall
-                    ? "call_smoke_first"
-                    : "call_smoke_subsequent",
+                id: independentRoot
+                  ? "call_tree_independent"
+                  : followup
+                    ? "call_smoke_followup"
+                    : firstCall
+                      ? "call_smoke_first"
+                      : "call_smoke_subsequent",
                 type: "function",
                 function: {
                   name: tool.function.name,
@@ -429,7 +453,14 @@ async function mockModel(
         complete(
           response,
           body,
-          { role: "assistant", content: followup ? "SMOKE_FOLLOWUP_COMPLETE" : "SMOKE_COMPLETE" },
+          {
+            role: "assistant",
+            content: independentRoot
+              ? "ROOT_INDEPENDENT_COMPLETE"
+              : followup
+                ? "SMOKE_FOLLOWUP_COMPLETE"
+                : "SMOKE_COMPLETE",
+          },
           "stop",
         );
       }
@@ -448,6 +479,7 @@ async function mockModel(
     allRequests,
     primaryRequests,
     quarantineRequests,
+    treeProbeRequests,
     failures,
     baseURL: `http://127.0.0.1:${address.port}/v1`,
   };
@@ -526,16 +558,19 @@ async function runScenario(
   disabled = false,
   managedService = false,
   restartQuarantine = false,
+  rootTreeQuarantine = false,
 ) {
-  const caseName = restartQuarantine
-    ? "quarantine-restart"
-    : managedService
-      ? "managed-service"
-      : disabled
-        ? "disabled"
-        : brokenStartup
-          ? "startup-failure"
-          : `${toolKind}/${scenario}`;
+  const caseName = rootTreeQuarantine
+    ? `root-tree/${scenario === "reject-pre" ? "pre" : "post"}`
+    : restartQuarantine
+      ? "quarantine-restart"
+      : managedService
+        ? "managed-service"
+        : disabled
+          ? "disabled"
+          : brokenStartup
+            ? "startup-failure"
+            : `${toolKind}/${scenario}`;
   if (process.env.SMOKE_CASES && !process.env.SMOKE_CASES.split(",").includes(caseName)) return;
   const temporary = await mkdtemp(join(tmpdir(), `opencode-sensor-v2-${scenario}-`));
   const workdir = join(temporary, "workspace");
@@ -705,11 +740,22 @@ async function runScenario(
       serverState,
     );
     let state = serverState;
-    const session = await client.session.create({
-      location: { directory: workdir },
-      model: { providerID: "sensor-smoke", id: "deterministic" },
-      permissions: [{ action: "*", resource: "*", effect: "allow" }],
-    });
+    const createSession = (parentID?: string) =>
+      client.session.create({
+        location: { directory: workdir },
+        model: { providerID: "sensor-smoke", id: "deterministic" },
+        permissions: [{ action: "*", resource: "*", effect: "allow" }],
+        ...(parentID ? { parentID } : {}),
+      });
+    const rootSession = await createSession();
+    const parentSession = rootTreeQuarantine ? await createSession(rootSession.id) : undefined;
+    const siblingSession = rootTreeQuarantine ? await createSession(rootSession.id) : undefined;
+    const session = parentSession ? await createSession(parentSession.id) : rootSession;
+    if (rootTreeQuarantine) {
+      assert.equal(parentSession!.parentID, rootSession.id);
+      assert.equal(siblingSession!.parentID, rootSession.id);
+      assert.equal(session.parentID, parentSession!.id);
+    }
     if (customScenario) {
       eventTask = (async () => {
         try {
@@ -725,9 +771,9 @@ async function runScenario(
         }
       })();
     }
-    const waitForTurn = async (completion: string) => {
+    const waitForTurn = async (completion: string, targetSessionID = session.id) => {
       await client.session.wait(
-        { sessionID: session.id },
+        { sessionID: targetSessionID },
         {
           signal: AbortSignal.timeout(stageTimeoutMs),
         },
@@ -736,7 +782,7 @@ async function runScenario(
         completion,
         async () => {
           const messages = await client.message.list(
-            { sessionID: session.id, limit: 100 },
+            { sessionID: targetSessionID, limit: 100 },
             {
               signal: AbortSignal.timeout(2_000),
             },
@@ -751,7 +797,7 @@ async function runScenario(
           );
           if (!complete) return undefined;
           const active = await client.session.active({ signal: AbortSignal.timeout(2_000) });
-          if (active[session.id]) return undefined;
+          if (active[targetSessionID]) return undefined;
           completedOutput.push(JSON.stringify(messages.data));
           return true;
         },
@@ -847,6 +893,17 @@ async function runScenario(
     assert.equal(await exists(marker), false, "Operation ran while the pre approval was pending");
 
     await assertAuditContext(stateDirectory, pre, `${scenario}/pre`);
+    if (rootTreeQuarantine) {
+      const bound = JSON.parse(
+        await readFile(join(stateDirectory, "requests", `${pre.request_id}.json`), "utf8"),
+      );
+      assert.equal(bound.context.session_scope.root_resolved, true);
+      assert.equal(
+        bound.context.session_scope.root_session_id,
+        rootSession.id,
+        "The triggering grandchild did not bind its verified root session",
+      );
+    }
 
     if (scenario === "reject-pre" || scenario === "cancel-pre" || scenario === "custom-pre") {
       if (scenario === "custom-pre")
@@ -995,6 +1052,74 @@ async function runScenario(
         false,
         "Quarantined private result resurfaced in the next user turn",
       );
+      if (rootTreeQuarantine) {
+        // This branch did not exist when the grandchild selected quarantine.
+        const newChild = await createSession(siblingSession!.id);
+        assert.equal(newChild.parentID, siblingSession!.id);
+        const targets = [
+          { label: "ROOT", id: rootSession.id },
+          { label: "PARENT", id: parentSession!.id },
+          { label: "SIBLING", id: siblingSession!.id },
+          { label: "NEW_CHILD", id: newChild.id },
+        ];
+        for (const target of targets) {
+          await client.session.prompt({
+            sessionID: target.id,
+            text: `Try to run a shell operation, then explain whether tools are available. ROOT_TREE_PROBE_${target.label}`,
+          });
+          await waitForTurn(`ROOT_TREE_COMPLETE_${target.label}`, target.id);
+          const requests = model.treeProbeRequests.filter((item) => item.label === target.label);
+          assert.ok(requests.length > 0, `${target.label} lost text generation after quarantine`);
+          assert.ok(
+            requests.every(({ request }) => (request.tools?.length ?? 0) === 0),
+            `${target.label} still advertised tools after its grandchild selected quarantine`,
+          );
+          assert.deepEqual(
+            await pending(client, workdir),
+            [],
+            `${target.label} created a new approval`,
+          );
+        }
+        assert.deepEqual(
+          (await readdir(join(stateDirectory, "requests"))).sort(),
+          checkpointFiles,
+          "Quarantined root, parent, sibling or new child started another classifier checkpoint",
+        );
+        assert.equal(await exists(nextMarker), false);
+        assert.equal(await exists(followupMarker), false);
+
+        const independent = await createSession();
+        assert.equal(independent.parentID, undefined);
+        const independentMarker = join(workdir, "root-independent-operation.txt");
+        await client.session.prompt({
+          sessionID: independent.id,
+          text: "Run the separate root smoke operation, then finish. ROOT_TREE_INDEPENDENT",
+        });
+        await approveIndependentCall(
+          client,
+          workdir,
+          stateDirectory,
+          state,
+          independent.id,
+          independentMarker,
+          "root-independent",
+          "call_tree_independent",
+        );
+        await waitForTurn("ROOT_INDEPENDENT_COMPLETE", independent.id);
+        assert.equal(await readFile(independentMarker, "utf8"), "root-independent");
+        assert.ok(
+          forwardedToolResults().some((message) =>
+            JSON.stringify(message.content).includes("ROOT_INDEPENDENT_RESULT"),
+          ),
+          "A separate root session did not receive its approved tool result",
+        );
+        assert.equal(
+          (await readdir(join(stateDirectory, "requests"))).length,
+          checkpointFiles.length + 2,
+          "The independent root should have exactly one pre and one post checkpoint",
+        );
+        assert.deepEqual(model.failures, []);
+      }
       if (customScenario) {
         await poll(
           "two successful native turns after custom-answer quarantine",
@@ -1138,3 +1263,5 @@ await runScenario("approve", "none");
 await runScenario("approve", "shell", false, true);
 await runScenario("approve", "shell", false, false, true);
 await runScenario("reject-pre", "shell", false, false, false, true);
+await runScenario("reject-pre", "shell", false, false, false, false, true);
+await runScenario("reject-post", "shell", false, false, false, false, true);

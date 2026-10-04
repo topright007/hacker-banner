@@ -10,7 +10,7 @@ execution until the classifier or the user permits the operation.
 Only V2 is maintained. V1 remains for reference and receives no further development
 or fixes. Use V2 for new installations.
 
-V2 release **0.4.2** uses classifier contract **2.3.0** for its default
+V2 version **0.5.0** uses classifier contract **2.4.0** for its default
 `backend: "stub"`. This always-deny local stub does not evaluate safety or send
 data to a service.
 
@@ -23,8 +23,9 @@ The form does not display the tool name or classifier reason. With the always-de
 stub, this is fixed interface copy, not evidence of a detected attack. Two
 predefined choices are available:
 
-1. **«Продолжить в режиме карантина»** — persist chat-only quarantine for this
-   session and its descendants linked by `parentID`. Later tools are blocked
+1. **«Продолжить в режиме карантина»** — persist chat-only quarantine for the
+   verified root session and every descendant linked by `parentID`, including the
+   initiating child, its parents, and sibling branches. Later tools are blocked
    automatically without further approvals. Quarantine survives service restarts;
    unrelated new sessions remain available. Fork provenance alone does not imply
    parent-child inheritance.
@@ -36,6 +37,15 @@ quarantine, including words such as `allow` or the trust button's label. Each fo
 uses an opaque per-form value for the actual trust option; the native API does not
 identify input origin, so manually submitting that exact value is indistinguishable
 from selecting the button. Blank input leaves the form pending.
+
+The sensor verifies the root through the harness parent chain and matches it to
+the bound snapshot before opening the form. Failure refuses only the checkpoint.
+After a quarantine choice, the root is rechecked; failed revalidation quarantines
+only the initiating branch and attempts to persist it, without marking an
+unverified root. Existing child-only markers retain their old scope without
+migration. Tree audit records retain the initiating `session_id`, with
+`scope: "session_tree"` and a separate `quarantine_root_session_id`. Branch fallback
+uses `scope: "session"` without a root field.
 
 Post blocking replaces the complete result or error; completed side effects and
 already running external processes are not undone. Closing a form or a technical

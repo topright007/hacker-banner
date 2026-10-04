@@ -49,17 +49,17 @@
     },
     {
       "path": "/enforcement",
-      "api": "Plugin policy: per-checkpoint allow/cancel and explicit persistent session quarantine; native form labels are quarantine/allow choices",
+      "api": "Plugin policy: checkpoint allow/cancel and verified-root-tree quarantine. Root independently resolved through ctx.session.get parentID chain and matched to bound snapshot root_resolved/root_session_id.",
       "source": "plugins/opencode-v2/src/sensor.ts"
     },
     {
       "path": "/context/journal/approval_decisions",
-      "api": "Plugin-owned audit observations; quarantine choices use scope=session, remaining decisions scope=call",
+      "api": "Plugin-owned native audit: verified root-tree quarantine has scope=session_tree, initiating session_id and top-level quarantine_root_session_id; after-choice root verification failure has scope=session without a root field, and remaining decisions scope=call. Historical session records are retained.",
       "source": "plugins/opencode-v2/src/sensor.ts"
     },
     {
       "path": "/enforcement/user_quarantine",
-      "api": "Persistent hashed session markers plus parentID-chain inheritance, separate from the classifier history snapshot",
+      "api": "Persistent hashed verified-root markers plus parentID-chain inheritance. Existing child-only markers retain their old scope without migration; state remains separate from classifier history snapshots.",
       "source": "plugins/opencode-v2/src/quarantine-store.ts"
     },
     {
@@ -78,5 +78,5 @@
     "https://registry.npmjs.org/@opencode/client/-/client-2.0.22.tgz",
     "https://registry.npmjs.org/@opencode/schema/-/schema-2.0.22.tgz"
   ],
-  "contract_version": "2.3.0"
+  "contract_version": "2.4.0"
 }
