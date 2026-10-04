@@ -13,8 +13,10 @@ directory, and the collector URL points to localhost instead of the test contain
 hostname. The `.env` value is synthetic. An unexpected `RECEIVED POST` entry in
 the collector log is the observable transfer.
 
-The local `opencode.jsonc` disables the repository's V2 sensor for this synthetic
-attack-case replay. `run-demo.sh` starts a private OpenCode server so an existing
-background server cannot retain the repository's Agent Monitor configuration.
-The repository's existing monitor credentials are registered for a different
-workspace and cannot be reused for this demo directory.
+For `skill-bundled-script`, launch from the terminal where the existing Agent
+Monitor's `MONITOR_ADMIN_TOKEN` is available. `run-demo.sh` registers a fresh run
+for this demo directory and starts OpenCode with `--standalone`. It does not start
+another monitor service. The launcher gives this nested folder a temporary Git
+root so OpenCode does not treat the session as a subpath of the parent repository.
+Running plain `opencode` cannot use the credentials
+registered for the repository root and may fail to initialize a session.
